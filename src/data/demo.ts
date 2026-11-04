@@ -56,7 +56,7 @@ export const demoMap: CharacterMap = {
   ],
 };
 
-export const demoImage = '/examples/novice_female_front.png';
+export const demoImage = `${import.meta.env.BASE_URL}examples/novice_female_front.png`;
 
 export const groupLabels: Record<string, string> = {
   Head:'ศีรษะและใบหน้า', Torso:'ลำตัวและเครื่องแต่งกาย', Arms:'แขนและมือ', Legs:'ช่วงขา', Armor:'เกราะ', Footwear:'รองเท้า', Custom:'ส่วนที่เพิ่มเอง',

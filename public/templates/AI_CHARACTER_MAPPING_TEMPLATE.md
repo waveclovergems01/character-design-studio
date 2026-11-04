@@ -11,6 +11,9 @@
 1. Analyze **only the attached character image**; do not imagine hidden sides, limbs, or back details.
 2. Preserve exact character identity, pose, style, camera, relative sizes, face, hair, costume, and lighting; this is **documentation**, not a redesign.
 3. Report the actual image width and height in pixels when available. If unknown, disclose uncertainty.
+   - **SOURCE IDENTITY GATE:** `image.width`, `image.height`, and `image.file` MUST describe the *exact attached PNG/JPG/WebP*, not any prior upload, generated sprite sheet, thumbnail, or conversation example. Never guess a standard resolution.
+   - A 256×256 single-character PNG must yield a 256×256 **single-character map**, not a 960×1920 map for 32 sprite frames. Do not infer row/column tags (`r00_c00_*`) unless the actual source image visibly contains multiple frames.
+   - If it is really a sprite sheet, map coordinates to the FULL sheet dimensions and state the actual rows, columns, and order. If a frame is not visible, do not invent it.
 4. Identify **visible semantic parts**, including separately selectable left and right boots, gloves, sleeves, armor pieces, legs, hair, face, torso garment, belt, accessories. Avoid mapping too many unrelated items as one part.
 5. Give every part a permanent unique `id` using lowercase snake_case, Thai/English names, group, material, anatomical `side`, `z_index`, and optional `pair_key` for both-side selection.
 6. IMPORTANT: `character_left`/`character_right` refer to **the character's own anatomy**; in a front-facing view, character-left appears on the viewer's right. Never silently mirror.
@@ -22,6 +25,8 @@
 ### Quality checklist
 
 - Polygon positions match the image, not just plausible coordinates.
+- Exact `image.file` and pixel dimensions match the **same uploaded image** the user will import in Character Design Studio. State whether it is a single character or an actual multi-frame sheet.
+- Each polygon's location has been sanity-checked against the visible source image. A schema-valid JSON block alone does not mean the generated polygons are visually correct.
 - Shapes do not extend far outside the part; occluded pieces are not invented.
 - Color roles and rendering techniques differ meaningfully by material.
 - L/R anatomical labels correct; paired items use matching `pair_key`.
@@ -95,3 +100,5 @@ After the JSON block, for EACH `part.id` add a heading with the same ID, and exp
 ## Important
 
 This Markdown template is a **data contract**. A PNG is usually a flat raster, not a layered drawing. AI-proposed polygons are estimates and must be checked/adjusted in the Studio. Automatic SAM-style segmentation or actual generative image editing is **not included in this local MVP**; the Studio generates a prompt, edit JSON and selection mask for external AI use.
+
+**Import protection:** Character Design Studio will block an MD map whose pixel dimensions differ from the imported image, and will ask the user to review suspicious mappings (including different source names or large sprite sheets). A same-sized image can still contain the wrong visual subject; review region locations manually. The Shape Guide mode allows users to draw desired outlines directly on the current master image, without an MD map, then hand off the annotated PNG and a preserving-material edit prompt to an external AI manually.

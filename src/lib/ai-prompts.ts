@@ -36,5 +36,29 @@ export function makeEditPrompt(map: CharacterMap, request: EditRequest): string 
 }
 
 export function makeMappingPrompt(): string {
-  return `Analyze the attached character image and the attached AI_CHARACTER_MAPPING_TEMPLATE.md. Return a COMPLETE Markdown design specification following its schema. Include a valid fenced \`\`\`character-map JSON block, accurate normalized_1000 polygons for each visible semantic part, colors (#RRGGBB), material, rendering techniques, anatomical left/right, z-index, notes, and confidence. Do not invent unseen details or claim exact sampled colors without actual sampling. Keep each part ID stable. The result must be importable into Character Design Studio. Return only the Markdown file contents.`;
+  return `TASK: Create an IMPORTABLE character design mapping Markdown file for Character Design Studio (My-Game-Design).
+
+ATTACHMENTS (BOTH REQUIRED):
+1. My master character image (PNG/JPG/WebP).
+2. AI_CHARACTER_MAPPING_TEMPLATE.md (the required data contract and example format).
+
+Analyze ONLY the attached image. Read and follow the entire attached template. Preserve character identity; do not generate, repaint or redesign the image.
+
+CRITICAL SOURCE CHECK BEFORE MAPPING:
+- Read the ACTUAL attached image width, height, filename, and layout. The master image is the only source of truth: do not use an older image, conversation image, example, or a filename mentioned in this prompt.
+- If the actual attachment is ONE character in ONE image, map that ONE character only. Do not invent sprite-sheet rows, frames, 8 directions, or IDs like r00_c00_* unless the attachment really is a sprite sheet.
+- If the attachment IS a sprite sheet, explicitly describe the visible row/column layout and map every polygon to the complete sheet, never to a separate enlarged frame. Never fabricate hundreds of repeated parts without checking the actual image.
+- image.width and image.height MUST match the attached source image exactly, and image.file MUST name that source image. Never silently substitute an imagined 960x1920 or 1024x1536 canvas.
+
+OUTPUT REQUIREMENTS:
+1. Return ONE COMPLETE .md Markdown document. Put the required machine-readable data in exactly one fenced block starting with three backticks immediately followed by character-map, a newline, valid JSON, and closing three backticks. Do NOT wrap the entire Markdown document in another code fence.
+2. Use schema_version "1.0" and coordinate_system "normalized_1000" exactly. The JSON must include character, image.width, image.height and parts, using the exact keys and types from the template. Report the real image dimensions; do not silently assume 1024x1536.
+3. For EACH visible independent part, include a unique stable snake_case ID, Thai/English name, group, anatomical side, material, HEX #RRGGBB color roles, detailed technique, notes, polygons, numeric z_index, locked, allow_geometry_change, review_status. Add pair_key for left/right matching parts.
+4. Coordinates are based on the FULL attached image: top-left (0,0), bottom-right (1000,1000). Each visible polygon has at least 3 [x,y] vertices, integers 0–1000. Trace the ACTUAL location and silhouette, including left/right boots, gloves, hair and clothing. Polygons are approximate visual estimates and must be reviewed by a human. DO NOT map multiple tiny imaginary frames onto a single character.
+5. Anatomical character_left and character_right mean the character's own left/right, NOT the viewer's screen left/right. Separate paired pieces when visible.
+6. After the data block, write detailed part-by-part painting instructions for beginners using Krita: contour construction, color placement, shadow/highlight, brush/material treatment, overlap and layer order.
+7. Do not invent unseen parts or pretend colors were sampled precisely when you can only estimate. If image information is insufficient, explain the uncertainty separately, not inside the JSON.
+8. Validate that the JSON parses: double-quoted keys/strings, no comments, no trailing commas, no NaN, no invalid HEX codes. Follow the template exactly and do not omit required fields.
+
+The completed Markdown must be importable directly via Character Design Studio > นำเข้า MD, paired with the SAME unchanged master image. Return the Markdown document ONLY, with no prefatory chat response.`;
 }

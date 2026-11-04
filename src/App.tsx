@@ -1,20 +1,37 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import {
   AlertTriangle, ArrowLeftRight, BadgeCheck, BookOpenText, Check, ChevronDown, ChevronRight,
   CircleHelp, Copy, Crosshair, Download, FileCode2, FileJson2, FileText, FolderOpen,
   Image as ImageIcon, Layers3, Maximize, MousePointer2, Paintbrush, PenLine, Plus, RotateCcw,
   Save, ScanLine, Search, ShieldCheck, Sparkles, Tag, Trash2, Upload, WandSparkles, X,
-  ZoomIn, ZoomOut,
+  ZoomIn, ZoomOut, House, Shapes,
 } from 'lucide-react';
+import HomePage from './components/HomePage';
+import GuidePage from './components/GuidePage';
+import ShapeToolPanel from './components/ShapeToolPanel';
 import { demoImage, demoMap, groupLabels } from './data/demo';
 import { parseCharacterMarkdown, toCharacterMarkdown, validateMap, normalizePoint } from './lib/character-map';
 import { ACTIONS, makeEditPrompt, makeEditRequest, makeMappingPrompt } from './lib/ai-prompts';
 import { copyText, downloadBlob, downloadText, exportMaskPng, loadImage } from './lib/download';
-import type { CharacterMap, CharacterPart, EditAction, Point } from './lib/types';
+import { clampZoom, fittedImageSize, stepZoom, wheelZoom } from './lib/zoom';
+import { panScrollPosition } from './lib/pan';
+import { inspectMapCompatibility, makeMappingRepairPrompt } from './lib/map-compatibility';
+import { scanMapImageQuality } from './lib/map-image-quality';
+import type { MapImageQuality } from './lib/map-image-quality';
+import { cloneRegion, copyPngBlob, DEFAULT_SHAPE_VALUES, imageToPngBlob, makeShapeGuidePrompt, renderShapeGuidePng, transformRegion } from './lib/shape-guide';
+import type { ShapeValues } from './lib/shape-guide';
+import type { CharacterMap, CharacterPart, EditAction, Point, Region } from './lib/types';
+import './guide.css';
+import './shape.css';
 
-type WorkTab = 'inspect' | 'tag' | 'ai' | 'docs';
+type WorkTab = 'inspect' | 'tag' | 'shape' | 'ai' | 'docs';
 type HistoryItem = { map: CharacterMap; imageUrl: string; imageSize: { width: number; height: number }; docsText: string; version: number };
+type ZoomAnchor = { clientX: number; clientY: number; imageX: number; imageY: number };
+type Page = 'home' | 'guide' | 'studio';
+type PanStart = { pointerId: number; clientX: number; clientY: number; scrollLeft: number; scrollTop: number };
+type PendingMap = { value: CharacterMap; filename: string; text: string };
+const pageFromHash = (): Page => window.location.hash === '#studio' ? 'studio' : window.location.hash === '#guide' ? 'guide' : 'home';
 
 const starter = () => structuredClone(demoMap);
 const basename = (name: string) => name.replace(/\.[^/.]+$/, '').replace(/[^a-z\d_-]+/gi, '_').toLowerCase();
@@ -28,21 +45,45 @@ const emptyMap = (width: number, height: number, name = 'New Character'): Charac
 function Label({ children }: { children: React.ReactNode }) { return <div className="field-label">{children}</div>; }
 
 function App() {
-  const [map, setMap] = useState<CharacterMap>(starter);
-  const [imageUrl, setImageUrl] = useState(demoImage);
+  const [page, setPage] = useState<Page>(pageFromHash);
+  const [map, setMap] = useState<CharacterMap>(() => emptyMap(1024, 1536, 'Untitled Character'));
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState({ width: 1024, height: 1536 });
-  const [docsText, setDocsText] = useState(() => toCharacterMarkdown(demoMap));
-  const [documentFilename, setDocumentFilename] = useState('novice_female_character_map.md');
-  const [selectedIds, setSelectedIds] = useState<string[]>(['boot_character_left']);
+  const [imageName, setImageName] = useState('');
+  const [pendingMap, setPendingMap] = useState<PendingMap | null>(null);
+  const [mapWarnings, setMapWarnings] = useState<string[]>([]);
+  const [mapQuality, setMapQuality] = useState<MapImageQuality | null>(null);
+  const [regionsApproved, setRegionsApproved] = useState(true);
+  const qualitySerial = useRef(0);
+  const qualityAcceptedRef = useRef(false);
+  const [docsText, setDocsText] = useState('');
+  const [documentFilename, setDocumentFilename] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [tab, setTab] = useState<WorkTab>('inspect');
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<string[]>([]);
   const [showOutlines, setShowOutlines] = useState(true);
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  const zoomAnchorRef = useRef<ZoomAnchor | null>(null);
+  const [canvasFocused, setCanvasFocused] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const panRef = useRef<PanStart | null>(null);
+  const [viewportSize, setViewportSize] = useState({ width: 900, height: 650 });
   const [drawing, setDrawing] = useState(false);
   const [drawPoints, setDrawPoints] = useState<Point[]>([]);
   const [dragVertex, setDragVertex] = useState<{ id: string; polygon: number; vertex: number } | null>(null);
+  const [shapeBase, setShapeBase] = useState<Region>([]);
+  const [shapeSource, setShapeSource] = useState<Region>([]);
+  const [shapeValues, setShapeValues] = useState<ShapeValues>(DEFAULT_SHAPE_VALUES);
+  const [shapeDrawing, setShapeDrawing] = useState(false);
+  const [shapeDraft, setShapeDraft] = useState<Point[]>([]);
+  const [dragShapeVertex, setDragShapeVertex] = useState<{ polygon: number; vertex: number } | null>(null);
+  const [shapePartName, setShapePartName] = useState('ขาของตัวละคร');
+  const [shapeInstruction, setShapeInstruction] = useState('ปรับรูปทรงส่วนที่เลือกให้ตรงเส้นสีส้ม โดยรักษาสี วัสดุ ลวดลาย และแสงเงาเดิม');
+  const [masterBlob, setMasterBlob] = useState<Blob | null>(null);
+  const [shapeBlob, setShapeBlob] = useState<Blob | null>(null);
   const [action, setAction] = useState<EditAction>('REPLACE_ITEM');
   const [instruction, setInstruction] = useState('เปลี่ยนรองเท้าบูตหนังเป็นรองเท้าเกราะผลึกเพชรสีเงินและฟ้า มีเหลี่ยมผลึกสะท้อนแสง แต่คงตำแหน่งเท้าและสัดส่วน');
   const [expandGeometry, setExpandGeometry] = useState(true);
@@ -57,6 +98,115 @@ function App() {
   const jsonInput = useRef<HTMLInputElement>(null);
   const candidateInput = useRef<HTMLInputElement>(null);
   const overlay = useRef<SVGSVGElement>(null);
+  const canvasViewport = useRef<HTMLDivElement>(null);
+  const artboardRef = useRef<HTMLDivElement>(null);
+
+  const goToPage = (target: Page) => {
+    window.location.hash = target === 'home' ? '' : target;
+    setPage(target);
+    window.scrollTo(0, 0);
+  };
+
+  useEffect(() => {
+    const handleHash = () => setPage(pageFromHash());
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  useEffect(() => {
+    if (page !== 'studio') return;
+    const element = canvasViewport.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      setViewportSize({ width: element.clientWidth, height: element.clientHeight });
+    });
+    observer.observe(element);
+    setViewportSize({ width: element.clientWidth, height: element.clientHeight });
+    return () => observer.disconnect();
+  }, [page, imageUrl]);
+
+  // Give the canvas a larger world than the image and center it on first load.
+  // This leaves panning room even when the image fits in the viewport.
+  useLayoutEffect(() => {
+    if (page !== 'studio' || !imageUrl) return;
+    const viewport = canvasViewport.current;
+    if (!viewport) return;
+    viewport.scrollLeft = (viewport.scrollWidth - viewport.clientWidth) / 2;
+    viewport.scrollTop = (viewport.scrollHeight - viewport.clientHeight) / 2;
+  }, [page, imageUrl, viewportSize.width, viewportSize.height]);
+
+  const requestZoom = (nextZoom: number, clientX?: number, clientY?: number) => {
+    const viewport = canvasViewport.current;
+    const artboard = artboardRef.current;
+    if (!imageUrl || !viewport || !artboard) return;
+    const next = clampZoom(nextZoom);
+    if (Math.abs(next - zoomRef.current) < .0005) return;
+    const viewportRect = viewport.getBoundingClientRect();
+    const imageRect = artboard.getBoundingClientRect();
+    const x = clientX ?? viewportRect.left + viewportRect.width / 2;
+    const y = clientY ?? viewportRect.top + viewportRect.height / 2;
+    zoomAnchorRef.current = {
+      clientX: x, clientY: y,
+      imageX: Math.max(0, Math.min(1, (x - imageRect.left) / imageRect.width)),
+      imageY: Math.max(0, Math.min(1, (y - imageRect.top) / imageRect.height)),
+    };
+    zoomRef.current = next;
+    setZoom(next);
+  };
+
+  const onCanvasPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    canvasViewport.current?.focus({ preventScroll: true });
+    if (event.button !== 1) return;
+    const viewport = canvasViewport.current;
+    if (!viewport) return;
+    event.preventDefault(); // Suppress browser middle-click auto-scroll.
+    panRef.current = {
+      pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY,
+      scrollLeft: viewport.scrollLeft, scrollTop: viewport.scrollTop,
+    };
+    viewport.setPointerCapture(event.pointerId);
+    setPanning(true);
+  };
+
+  const onCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = panRef.current;
+    const viewport = canvasViewport.current;
+    if (!pan || !viewport || event.pointerId !== pan.pointerId) return;
+    event.preventDefault();
+    viewport.scrollLeft = panScrollPosition(pan.scrollLeft, pan.clientX, event.clientX);
+    viewport.scrollTop = panScrollPosition(pan.scrollTop, pan.clientY, event.clientY);
+  };
+
+  const finishCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (panRef.current?.pointerId !== event.pointerId) return;
+    panRef.current = null;
+    setPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchorRef.current;
+    const artboard = artboardRef.current;
+    const viewport = canvasViewport.current;
+    if (!anchor || !viewport || !artboard) return;
+    const rect = artboard.getBoundingClientRect();
+    viewport.scrollLeft += rect.left + anchor.imageX * rect.width - anchor.clientX;
+    viewport.scrollTop += rect.top + anchor.imageY * rect.height - anchor.clientY;
+    zoomAnchorRef.current = null;
+  }, [zoom]);
+
+  useEffect(() => {
+    if (page !== 'studio' || !imageUrl) return;
+    const element = canvasViewport.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (document.activeElement !== element) return;
+      event.preventDefault();
+      requestZoom(wheelZoom(zoomRef.current, event.deltaY, event.deltaMode), event.clientX, event.clientY);
+    };
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [page, imageUrl]);
 
   useEffect(() => {
     if (!toast) return;
@@ -74,6 +224,54 @@ function App() {
   const request = useMemo(() => makeEditRequest(map, selectedIds, action, instruction, expandGeometry), [map, selectedIds, action, instruction, expandGeometry]);
   const prompt = useMemo(() => makeEditPrompt(map, request), [map, request]);
   const mismatchedDimensions = map.image.width !== imageSize.width || map.image.height !== imageSize.height;
+  const renderedSize = fittedImageSize(imageSize.width, imageSize.height, viewportSize.width, viewportSize.height, zoom);
+  const stageSize = {
+    width: Math.max(viewportSize.width, renderedSize.width + 60) + Math.max(viewportSize.width, 320),
+    height: Math.max(viewportSize.height, renderedSize.height + 60) + Math.max(viewportSize.height, 320),
+  };
+  const pendingCompatibility = pendingMap && imageUrl
+    ? inspectMapCompatibility(pendingMap.value, { ...imageSize, name: imageName }) : null;
+  const shapeTarget = useMemo(() => transformRegion(shapeBase, DEFAULT_SHAPE_VALUES, shapeValues), [shapeBase, shapeValues]);
+  const shapePrompt = useMemo(() => makeShapeGuidePrompt(
+    imageName || 'master_character.png', imageSize.width, imageSize.height,
+    shapePartName, shapeInstruction, shapeTarget, shapeSource,
+  ), [imageName, imageSize.width, imageSize.height, shapePartName, shapeInstruction, shapeTarget, shapeSource]);
+
+  useEffect(() => {
+    let live = true;
+    setMasterBlob(null);
+    if (!imageUrl) return;
+    void imageToPngBlob(imageUrl, imageSize.width, imageSize.height)
+      .then(blob => { if (live) setMasterBlob(blob); })
+      .catch(() => { if (live) setMasterBlob(null); });
+    return () => { live = false; };
+  }, [imageUrl, imageSize.width, imageSize.height]);
+
+  useEffect(() => {
+    let live = true;
+    setShapeBlob(null);
+    if (!imageUrl || !shapeTarget.some(p => p.length >= 3)) return;
+    const timer = window.setTimeout(() => {
+      void renderShapeGuidePng(imageUrl, imageSize.width, imageSize.height, shapeSource, shapeTarget)
+        .then(blob => { if (live) setShapeBlob(blob); })
+        .catch(() => { if (live) setShapeBlob(null); });
+    }, 180);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [imageUrl, imageSize.width, imageSize.height, shapeSource, shapeTarget]);
+
+  useEffect(() => {
+    const token = ++qualitySerial.current;
+    setMapQuality(null);
+    if (!imageUrl || !map.parts.length) return;
+    const timer = window.setTimeout(() => {
+      void scanMapImageQuality(map, imageUrl).then(result => {
+        if (qualitySerial.current !== token) return;
+        setMapQuality(result);
+        if (result.suspicious && !qualityAcceptedRef.current) setRegionsApproved(false);
+      }).catch(() => { if (qualitySerial.current === token) setMapQuality(null); });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [map, imageUrl]);
 
   const notify = (message: string) => setToast(message);
 
@@ -86,10 +284,45 @@ function App() {
     setMap(prev => ({ ...prev, parts: prev.parts.map(p => p.id === id ? { ...p, ...changes } : p) }));
   };
 
+  const resetShape = () => {
+    setShapeBase([]);setShapeSource([]);setShapeValues(DEFAULT_SHAPE_VALUES);
+    setShapeDrawing(false);setShapeDraft([]);setDragShapeVertex(null);
+  };
+
+  const applyParsedMap = (parsed: CharacterMap, sourceText: string, filename: string) => {
+    setDocsText(sourceText);
+    setDocumentFilename(filename);
+    if (!imageUrl) {
+      setPendingMap({ value: parsed, text: sourceText, filename });
+      setTab('docs');
+      notify(`อ่าน MD แล้ว ${parsed.parts.length} Parts — กรุณานำเข้ารูปต้นฉบับที่ตรงกันก่อน`);
+      return;
+    }
+    const report = inspectMapCompatibility(parsed, { ...imageSize, name: imageName });
+    if (!report.compatible) {
+      setPendingMap({ value: parsed, text: sourceText, filename });
+      setTab('docs');
+      notify('บล็อก Mapping: ขนาดรูปไม่ตรงกับ MD — ไม่แสดง Polygon ที่ผิดรูป');
+      return;
+    }
+    setMap(parsed);
+    setPendingMap(null);
+    setMapWarnings(report.warnings);
+    setSelectedIds(parsed.parts.length ? [parsed.parts[0].id] : []);
+    setDrawing(false);
+    qualityAcceptedRef.current = false;
+    setRegionsApproved(report.warnings.length === 0);
+    setTab('inspect');
+    notify(`นำเข้า Mapping ตรงขนาดภาพแล้ว: ${parsed.parts.length} Parts${report.warnings.length?' — มีข้อควรตรวจในแท็บ MD':''}`);
+  };
+
   const resetDemo = () => {
     setMap(starter());
     setImageUrl(demoImage);
     setImageSize({ width: 1024, height: 1536 });
+    setImageName('novice_female_front.png');
+    setPendingMap(null);setMapWarnings([]);setMapQuality(null);qualityAcceptedRef.current=true;setRegionsApproved(true);
+    resetShape();
     setDocsText(toCharacterMarkdown(demoMap));
     setDocumentFilename('novice_female_character_map.md');
     setSelectedIds(['boot_character_left']);
@@ -98,6 +331,7 @@ function App() {
     setHistory([]);
     setVersion(1);
     setZoom(1);
+    zoomRef.current = 1;
     notify('โหลด Novice Female Demo พร้อม Tag ตัวอย่างแล้ว');
   };
 
@@ -111,16 +345,32 @@ function App() {
       const size = await loadImage(url);
       setImageUrl(url);
       setImageSize(size);
-      setMap(emptyMap(size.width, size.height, basename(file.name)));
+      setImageName(file.name);
+      resetShape();
+      setMapQuality(null);setMapWarnings([]);qualityAcceptedRef.current=false;setRegionsApproved(true);
       setSelectedIds([]);
-      setDocsText('');
-      setDocumentFilename('');
+      if (pendingMap) {
+        const report = inspectMapCompatibility(pendingMap.value, { ...size, name:file.name });
+        if (report.compatible) {
+          setMap(pendingMap.value);
+          setSelectedIds(pendingMap.value.parts.length ? [pendingMap.value.parts[0].id] : []);
+          setMapWarnings(report.warnings);
+          setRegionsApproved(report.warnings.length === 0);
+          setPendingMap(null);
+        } else {
+          setMap(emptyMap(size.width,size.height,basename(file.name)));
+        }
+      } else {
+        setMap(emptyMap(size.width, size.height, basename(file.name)));
+        setDocsText('');setDocumentFilename('');
+      }
       setCandidateUrl(null);
       setHistory([]);
       setVersion(1);
       setZoom(1);
+      zoomRef.current = 1;
       setTab('inspect');
-      notify(`นำเข้าภาพ ${file.name} สำเร็จ — ตอนนี้รอ MD ที่มี Character Map`);
+      notify(pendingMap ? 'นำเข้ารูปแล้ว — ระบบตรวจความตรงกับ MD ที่รออยู่ กรุณาดูแท็บ MD' : `นำเข้าภาพ ${file.name} แล้ว — เพิ่ม Shape Guide ได้แม้ไม่มี MD`);
     } catch (error) { URL.revokeObjectURL(url); notify(error instanceof Error ? error.message : 'เปิดไฟล์ไม่ได้'); }
   };
 
@@ -133,14 +383,9 @@ function App() {
     setDocumentFilename(file.name);
     try {
       const parsed = parseCharacterMarkdown(text);
-      setMap(parsed);
-      setSelectedIds(parsed.parts.length ? [parsed.parts[0].id] : []);
-      setDrawing(false);
-      setTab('inspect');
-      notify(`ประมวลผล MD แล้ว พบ ${parsed.parts.length} ส่วน — ตรวจ Outline บนรูปอีกครั้ง`);
+      applyParsedMap(parsed,text,file.name);
     } catch (error) {
-      setMap(prev => ({ ...prev, parts: [] }));
-      setSelectedIds([]);
+      setPendingMap(null);
       setTab('docs');
       notify(error instanceof Error ? error.message : 'MD ยังไม่มีข้อมูลขอบเขต');
     }
@@ -152,11 +397,7 @@ function App() {
     if (!file) return;
     try {
       const parsed = validateMap(JSON.parse(await file.text()));
-      setMap(parsed);
-      setSelectedIds(parsed.parts.length ? [parsed.parts[0].id] : []);
-      setDocsText(toCharacterMarkdown(parsed));
-      setDocumentFilename(file.name);
-      notify(`อ่าน JSON สำเร็จ: ${parsed.parts.length} Tag`);
+      applyParsedMap(parsed,toCharacterMarkdown(parsed),file.name);
     } catch (error) { notify(error instanceof Error ? error.message : 'ไฟล์ JSON ไม่ถูกต้อง'); }
   };
 
@@ -199,7 +440,7 @@ function App() {
   };
 
   const applyCandidate = () => {
-    if (!candidateUrl) return;
+    if (!candidateUrl || !imageUrl) return;
     setHistory(prev => [...prev, { map: structuredClone(map), imageUrl, imageSize, docsText, version }]);
     setImageUrl(candidateUrl);
     setCandidateUrl(null);
@@ -232,6 +473,7 @@ function App() {
   };
 
   const addPart = () => {
+    if (!imageUrl) { notify('กรุณานำเข้าภาพหรือเปิด Demo ก่อนเพิ่ม Tag'); return; }
     const id = `custom_part_${Date.now().toString(36)}`;
     const fresh: CharacterPart = {
       id, name_th: 'ส่วนใหม่', name_en: 'New custom part', group: 'Custom', side: 'center',
@@ -262,6 +504,42 @@ function App() {
     notify('บันทึก Polygon แล้ว — ลากจุดสีขาวเพื่อปรับขอบเขตละเอียด');
   };
 
+  const shapeFromSelectedPart = () => {
+    if (!regionsApproved) {notify('Mapping ยังไม่ผ่านการตรวจ — เปิดแท็บ MD และยืนยัน Region ก่อน หรือวาด Shape เอง');setTab('docs');return;}
+    if (!activePart?.polygons.some(poly => poly.length >= 3)) { notify('เลือก Tag ที่มี Polygon ก่อน หรือใช้วาดพื้นที่เอง'); return; }
+    setDrawing(false);setDrawPoints([]);
+    setShapeDrawing(false);setShapeDraft([]);
+    setShapeBase(cloneRegion(activePart.polygons));
+    setShapeSource(cloneRegion(activePart.polygons));
+    setShapeValues(DEFAULT_SHAPE_VALUES);
+    setShapePartName(activePart.name_th);
+    setTab('shape');
+    notify(`นำ Region ของ “${activePart.name_th}” มาเป็นรูปทรงเริ่มต้นแล้ว — ลากจุดสีเหลืองได้`);
+  };
+
+  const startShapeDrawing = () => {
+    if (!imageUrl) { notify('นำเข้าภาพก่อนเริ่มวาด Shape'); return; }
+    resetShape();setDrawing(false);setDrawPoints([]);
+    setShapeDrawing(true);setTab('shape');
+    notify('คลิกบนภาพ 3 จุดขึ้นไป เพื่อวาดเส้นรอบรูปทรงเป้าหมาย แล้วกดจบรูปทรง');
+  };
+
+  const finishShapeDrawing = () => {
+    if (shapeDraft.length < 3) { notify('ต้องวาดอย่างน้อย 3 จุด'); return; }
+    setShapeBase([shapeDraft]);setShapeSource([]);setShapeValues(DEFAULT_SHAPE_VALUES);
+    setShapeDrawing(false);setShapeDraft([]);
+    notify('สร้าง Shape Guide แล้ว — ลากจุดสีเหลืองเพื่อแก้รูปทรงก่อนส่ง AI');
+  };
+
+  const copyShapeImage = async (kind: 'original' | 'guide') => {
+    const blob = kind === 'original' ? masterBlob : shapeBlob;
+    if (!blob) { notify('กำลังเตรียมภาพ กรุณารอสักครู่'); return; }
+    try {
+      await copyPngBlob(blob);
+      notify(kind === 'original' ? 'คัดลอกรูปต้นฉบับแล้ว — ไป Ctrl+V วางใน ChatGPT ก่อนคัดลอกรูปถัดไป' : 'คัดลอกรูป Shape Guide แล้ว — ไป Ctrl+V วางใน ChatGPT ก่อนคัดลอก Prompt');
+    } catch (error) { notify(error instanceof Error ? error.message : 'Copy PNG ไม่สำเร็จ — ดาวน์โหลด PNG แทน'); }
+  };
+
   const toNormalized = (clientX: number, clientY: number): Point => {
     const rect = overlay.current?.getBoundingClientRect();
     if (!rect || !rect.width || !rect.height) return [0, 0];
@@ -269,11 +547,17 @@ function App() {
   };
 
   const onSvgClick = (event: MouseEvent<SVGSVGElement>) => {
-    if (drawing && event.detail <= 1) setDrawPoints(prev => [...prev, toNormalized(event.clientX, event.clientY)]);
-    else if (!drawing && (event.target === overlay.current || (event.target as Element).tagName.toLowerCase() === 'rect')) setSelectedIds([]);
+    if (shapeDrawing && event.detail <= 1) setShapeDraft(prev => [...prev, toNormalized(event.clientX, event.clientY)]);
+    else if (drawing && event.detail <= 1) setDrawPoints(prev => [...prev, toNormalized(event.clientX, event.clientY)]);
+    else if (!drawing && !shapeDrawing && tab !== 'shape' && (event.target === overlay.current || (event.target as Element).tagName.toLowerCase() === 'rect')) setSelectedIds([]);
   };
 
   const onSvgMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (dragShapeVertex) {
+      const pos = toNormalized(event.clientX,event.clientY);
+      setShapeBase(prev => prev.map((poly,i) => poly.map((point,j) => i===dragShapeVertex.polygon && j===dragShapeVertex.vertex ? pos : point)));
+      return;
+    }
     if (!dragVertex) return;
     const pos = toNormalized(event.clientX, event.clientY);
     setMap(prev => ({
@@ -287,7 +571,7 @@ function App() {
     }));
   };
 
-  const handleSvgPointerUp = () => setDragVertex(null);
+  const handleSvgPointerUp = () => {setDragVertex(null);setDragShapeVertex(null);};
 
   const changeColor = (partId: string, index: number, hex: string) => {
     setMap(prev => ({ ...prev, parts: prev.parts.map(p => p.id === partId ? {
@@ -301,6 +585,25 @@ function App() {
     <button className="subtle-button hidden-lg" onClick={() => jsonInput.current?.click()}><FileJson2 size={16} /> JSON</button>
   </>;
 
+  if (page === 'home') {
+    return <HomePage
+      onOpenStudio={() => goToPage('guide')}
+      onOpenWorkspace={() => goToPage('studio')}
+      onOpenExample={() => { resetDemo(); goToPage('studio'); }}
+      onOpenTemplateGuide={() => goToPage('guide')}
+      onDownloadTemplate={downloadTemplate}
+    />;
+  }
+
+  if (page === 'guide') {
+    return <GuidePage
+      onHome={() => goToPage('home')}
+      onOpenStudio={() => goToPage('studio')}
+      onOpenExample={() => { resetDemo(); goToPage('studio'); }}
+      onDownloadTemplate={downloadTemplate}
+    />;
+  }
+
   return (
     <div className="app-shell">
       <input ref={imageInput} type="file" className="hidden" accept="image/png,image/jpeg,image/webp,image/gif" onChange={importImage} />
@@ -313,14 +616,14 @@ function App() {
           <div className="brand-mark"><Layers3 size={21} strokeWidth={2.15} /></div>
           <div><div className="brand-title">CHARACTER<span>STUDIO</span></div><div className="brand-caption">MY-GAME-DESIGN <span className="version-dot">●</span> LOCAL WORKSPACE</div></div>
         </div>
-        <div className="top-actions">{imageButtons}<button className="primary-button" onClick={downloadTemplate}><Download size={16} /> AI Template <span className="hidden-mobile">.md</span></button></div>
+        <div className="top-actions"><button className="subtle-button home-return" onClick={() => goToPage('home')}><House size={16}/> หน้าแรก</button><button className="subtle-button" onClick={() => goToPage('guide')}><BookOpenText size={16}/> คู่มือเริ่มต้น</button>{imageButtons}<button className="primary-button" onClick={downloadTemplate}><Download size={16} /> AI Template <span className="hidden-mobile">.md</span></button></div>
       </header>
 
       <div className="workspace-grid">
         <aside className="sidebar panel-scroll">
-          <div className="sidebar-header"><span className="eyebrow">PROJECT EXPLORER</span><button title="โหลด Demo ใหม่" className="icon-button" onClick={resetDemo}><RotateCcw size={16}/></button></div>
+          <div className="sidebar-header"><span className="eyebrow">PROJECT EXPLORER</span><button title="เปิด Novice Female Demo" className="icon-button" onClick={resetDemo}><RotateCcw size={16}/></button></div>
           <div className="project-card">
-            <div className="project-thumbnail"><img src={imageUrl} alt="Character preview" /></div>
+            <div className="project-thumbnail">{imageUrl ? <img src={imageUrl} alt="Character preview" /> : <ImageIcon size={23}/>}</div>
             <div className="min-w-0"><div className="project-name">{map.character.name}</div><div className="project-meta"><span className="status-circle" /> MASTER · V{version}</div><div className="project-size">{imageSize.width} × {imageSize.height}px</div></div>
           </div>
 
@@ -350,7 +653,7 @@ function App() {
           </div>
 
           <div className="sidebar-bottom">
-            <button className="add-part-button" onClick={addPart}><Plus size={16}/> เพิ่ม Tag / กำหนด Region</button>
+            <button className="add-part-button" disabled={!imageUrl} onClick={addPart}><Plus size={16}/> เพิ่ม Tag / กำหนด Region</button>
             <div className="sidebar-mini-actions"><button onClick={downloadMap}><Save size={15}/> Export MD</button><button onClick={exportJson}><FileJson2 size={15}/> Export JSON</button></div>
             <div className="sidebar-foot"><ShieldCheck size={15}/><span>ข้อมูลทำงานใน Browser · ไม่มีการส่งภาพไปเซิร์ฟเวอร์</span></div>
           </div>
@@ -359,20 +662,21 @@ function App() {
         <main className="main-area">
           <div className="canvas-topbar">
             <div className="document-title"><span className="document-icon"><FolderOpen size={18}/></span><div><h1>{map.character.name}</h1><p><span>REFERENCE BOARD</span><span className="dot-sep">/</span>{map.character.view}</p></div></div>
-            <div className="canvas-tools"><button onClick={() => setShowOutlines(v => !v)} className={`tool-chip ${showOutlines ? 'tool-on' : ''}`}><Crosshair size={15}/> <span>Region</span></button><span className="tool-divider"/><button title="ย่อ" onClick={() => setZoom(v => Math.max(.65, +(v - .15).toFixed(2)))} className="icon-button"><ZoomOut size={17}/></button><span className="zoom-readout">{Math.round(zoom * 100)}%</span><button title="ขยาย" onClick={() => setZoom(v => Math.min(2.4, +(v + .15).toFixed(2)))} className="icon-button"><ZoomIn size={17}/></button><button title="รีเซ็ต Zoom" onClick={() => setZoom(1)} className="icon-button"><Maximize size={16}/></button></div>
+            <div className="canvas-tools"><button onClick={() => setShowOutlines(v => !v)} className={`tool-chip ${showOutlines ? 'tool-on' : ''}`}><Crosshair size={15}/> <span>Region</span></button><button className={`tool-chip ${tab==='shape'?'tool-on':''}`} onClick={()=>setTab('shape')} title="โหมด Shape Guide"><Shapes size={15}/><span>Shape</span></button><span className="tool-divider"/><button disabled={!imageUrl} title="ย่อภาพ (−)" onClick={() => requestZoom(stepZoom(zoomRef.current, -1))} className="icon-button"><ZoomOut size={17}/></button><span className="zoom-readout">{Math.round(zoom * 100)}%</span><button disabled={!imageUrl} title="ขยายภาพ (+)" onClick={() => requestZoom(stepZoom(zoomRef.current, 1))} className="icon-button"><ZoomIn size={17}/></button><button disabled={!imageUrl} title="รีเซ็ต Zoom 100%" onClick={() => requestZoom(1)} className="icon-button"><Maximize size={16}/></button></div>
           </div>
 
           <div className="canvas-content">
             <div className="canvas-watermark top-left">FIG. 001 <span className="watermark-line"/> CHARACTER REFERENCE</div>
             <div className="canvas-watermark top-right">{map.coordinate_system} <span className="watermark-line"/> {count} PARTS</div>
-            <div className="canvas-scroll">
-              <div className="artboard" style={{ aspectRatio: `${imageSize.width}/${imageSize.height}`, transform: `scale(${zoom})` }}>
+            {imageUrl ? <div ref={canvasViewport} className={`canvas-scroll ${canvasFocused ? 'canvas-focused' : ''} ${panning ? 'canvas-panning' : ''}`} tabIndex={0} aria-label="พื้นที่ภาพ คลิกเพื่อโฟกัสแล้วหมุนล้อเพื่อซูม กดล้อเมาส์ค้างเพื่อลากดูภาพ" onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={finishCanvasPan} onPointerCancel={finishCanvasPan} onLostPointerCapture={() => {panRef.current = null;setPanning(false);}} onAuxClick={event => {if (event.button === 1) event.preventDefault();}} onFocus={() => setCanvasFocused(true)} onBlur={() => setCanvasFocused(false)} onKeyDown={event => {if (event.key === '+' || event.key === '=') {event.preventDefault();requestZoom(stepZoom(zoomRef.current,1));} else if (event.key === '-') {event.preventDefault();requestZoom(stepZoom(zoomRef.current,-1));} else if (event.key === '0') {event.preventDefault();requestZoom(1);}}}>
+              <div className="canvas-stage" style={{ width: stageSize.width, height: stageSize.height }}>
+              <div ref={artboardRef} className="artboard" style={{ width: renderedSize.width, height: renderedSize.height }}>
                 <div className="checker"/>
                 <img src={imageUrl} className="master-image" alt={`Master reference: ${map.character.name}`} draggable={false}/>
                 {candidateUrl && <img src={candidateUrl} alt="AI candidate overlay" className="master-image candidate-image" style={{opacity: compare / 100}} draggable={false}/>}
-                <svg ref={overlay} className={`region-layer ${drawing ? 'drawing' : ''}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" onClick={onSvgClick} onPointerMove={onSvgMove} onPointerUp={handleSvgPointerUp} onPointerCancel={handleSvgPointerUp}>
+                <svg ref={overlay} className={`region-layer ${drawing || shapeDrawing ? 'drawing' : ''} ${tab === 'shape' ? 'shape-tool-mode' : ''} ${shapeDrawing ? 'shape-drawing-mode' : ''}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" onClick={onSvgClick} onPointerMove={onSvgMove} onPointerUp={handleSvgPointerUp} onPointerCancel={handleSvgPointerUp}>
                   <rect x="0" y="0" width="1000" height="1000" fill="transparent" />
-                  {!candidateUrl && sortedRegions.map(part => part.polygons.map((poly, pIndex) => {
+                  {regionsApproved && !candidateUrl && tab !== 'shape' && sortedRegions.map(part => part.polygons.map((poly, pIndex) => {
                     const selected = selectedIds.includes(part.id);
                     const hovered = hoverId === part.id;
                     return <polygon key={`${part.id}:${pIndex}`} points={pointString(poly)}
@@ -382,8 +686,8 @@ function App() {
                       <title>{part.name_th} / {part.name_en}</title>
                     </polygon>;
                   }))}
-                  {tab === 'tag' && !candidateUrl && !drawing && activePart?.polygons.map((poly, pIndex) => poly.map(([x, y], vertex) => <circle key={`handle-${pIndex}-${vertex}`} cx={x} cy={y} r={9} className="vertex-handle"
-                    onPointerDown={e => { e.stopPropagation(); (e.currentTarget as SVGCircleElement).setPointerCapture(e.pointerId); setDragVertex({id:activePart.id, polygon:pIndex, vertex}); }}
+                  {regionsApproved && tab === 'tag' && !candidateUrl && !drawing && activePart?.polygons.map((poly, pIndex) => poly.map(([x, y], vertex) => <circle key={`handle-${pIndex}-${vertex}`} cx={x} cy={y} r={9} className="vertex-handle"
+                    onPointerDown={e => { if (e.button !== 0) return; e.stopPropagation(); (e.currentTarget as SVGCircleElement).setPointerCapture(e.pointerId); setDragVertex({id:activePart.id, polygon:pIndex, vertex}); }}
                     onPointerMove={e => { if (dragVertex?.id === activePart.id) onSvgMove(e as unknown as ReactPointerEvent<SVGSVGElement>); }}
                     onPointerUp={e => {e.stopPropagation();setDragVertex(null);}}
                     onClick={e => e.stopPropagation()} />))}
@@ -391,26 +695,42 @@ function App() {
                     {drawPoints.length > 1 && <polyline points={pointString(drawPoints)} fill="none" stroke="#FFDA8B" strokeWidth="4" strokeDasharray="10 7" vectorEffect="non-scaling-stroke"/>}
                     {drawPoints.map(([x,y],i) => <circle key={`draft-${i}`} cx={x} cy={y} r={9} fill="#F8D286" stroke="#2A1B13" strokeWidth="2" />)}
                   </>}
+                  {tab === 'shape' && !candidateUrl && <>
+                    {shapeSource.map((poly,i) => <polygon key={`shape-old-${i}`} className="shape-original" points={pointString(poly)}/>) }
+                    {shapeTarget.map((poly,i) => <polygon key={`shape-new-${i}`} className="shape-target" points={pointString(poly)}/>) }
+                    {!shapeDrawing && shapeTarget.map((poly,pIndex) => poly.map(([x,y],vertex) => <circle key={`shape-vertex-${pIndex}-${vertex}`} className="shape-handle" cx={x} cy={y} r={11}
+                      onPointerDown={e => {if(e.button!==0)return;e.stopPropagation();(e.currentTarget as SVGCircleElement).setPointerCapture(e.pointerId);setShapeBase(cloneRegion(shapeTarget));setShapeValues(DEFAULT_SHAPE_VALUES);setDragShapeVertex({polygon:pIndex,vertex});}}
+                      onPointerMove={e => {if(dragShapeVertex) onSvgMove(e as unknown as ReactPointerEvent<SVGSVGElement>);}}
+                      onPointerUp={e => {e.stopPropagation();setDragShapeVertex(null);}}
+                      onClick={e=>e.stopPropagation()}/>))}
+                    {shapeDrawing && <g className="shape-draft"><polyline points={pointString(shapeDraft)} fill="none" stroke="#FFB655" strokeWidth="3" vectorEffect="non-scaling-stroke" strokeDasharray="7 5"/>{shapeDraft.map(([x,y],i)=><circle key={`shape-draft-${i}`} cx={x} cy={y} r={9} fill="#FFDA86" stroke="#76542B" strokeWidth="2"/>)}</g>}
+                  </>}
                 </svg>
               </div>
-            </div>
-            {mismatchedDimensions && <div className="canvas-warning"><AlertTriangle size={15}/> MD ระบุ {map.image.width}×{map.image.height} แต่ภาพปัจจุบัน {imageSize.width}×{imageSize.height} — ตรวจ Mapping อีกครั้ง</div>}
+              </div>
+            </div> : <div className="canvas-empty-state"><div className="canvas-empty-icon"><ImageIcon size={29}/></div><div className="canvas-empty-kicker">NEW CHARACTER REFERENCE</div><h2>เริ่มจากนำเข้าภาพตัวละคร</h2><p>ถ้ายังไม่มีภาพหรือ MD ให้เปิดคู่มือเริ่มต้นเพื่อรับ Prompt สร้างรูป ดาวน์โหลด Template และสั่ง AI วิเคราะห์ทีละขั้นตอน</p><div className="canvas-empty-actions"><button onClick={() => imageInput.current?.click()}><Upload size={17}/> นำเข้ารูปภาพ</button><button onClick={() => goToPage('guide')}><BookOpenText size={17}/> คู่มือเริ่มต้น</button><button onClick={resetDemo}><Sparkles size={17}/> เปิด Example</button></div><span>เมื่อมีรูปแล้ว ให้กดนำเข้า MD เพื่อเชื่อมข้อมูลสี วัสดุ และขอบเขต</span></div>}
+            {pendingCompatibility && !pendingCompatibility.compatible && <div className="canvas-warning"><AlertTriangle size={15}/> MD ระบุ {pendingMap?.value.image.width}×{pendingMap?.value.image.height} แต่ภาพ {imageSize.width}×{imageSize.height} — บล็อก Region ผิดรูป <button onClick={()=>setTab('docs')}>ดูวิธีแก้</button></div>}
+            {imageUrl && mismatchedDimensions && <div className="canvas-warning"><AlertTriangle size={15}/> MD ระบุ {map.image.width}×{map.image.height} แต่ภาพปัจจุบัน {imageSize.width}×{imageSize.height} — ตรวจ Mapping อีกครั้ง</div>}
+            {!regionsApproved && mapWarnings.length>0 && <div className="canvas-warning"><AlertTriangle size={15}/> MD มีสิ่งที่ต้องตรวจ ({mapWarnings.length} ข้อ) — ซ่อน Region จนกว่าจะยืนยัน <button onClick={()=>setTab('docs')}>ตรวจสอบ MD</button></div>}
+            {mapQuality?.suspicious && !regionsApproved && !mapWarnings.length && <div className="canvas-warning"><AlertTriangle size={15}/> ตรวจพบ {mapQuality.outsideParts}/{mapQuality.checkedParts} Tags บนพื้นโปร่งใส — ซ่อน Region ที่น่าสงสัย <button onClick={()=>setTab('docs')}>ดูผลตรวจ</button></div>}
             {drawing && <div className="drawing-banner"><PenLine size={17}/><span>คลิกบนรูปเพื่อกำหนดจุด · {drawPoints.length} จุด</span><button onClick={finishDraw} className="banner-finish">จบ Polygon</button><button onClick={() => {setDrawing(false);setDrawPoints([]);}} className="banner-close" title="ยกเลิก"><X size={16}/></button></div>}
+            {shapeDrawing && <div className="drawing-banner"><Shapes size={17}/><span>Shape Guide · คลิกจุดรอบรูปทรงเป้าหมาย ({shapeDraft.length})</span><button onClick={finishShapeDrawing} disabled={shapeDraft.length<3} className="banner-finish">จบรูปทรง</button><button onClick={()=>{setShapeDrawing(false);setShapeDraft([]);}} className="banner-close" title="ยกเลิก"><X size={16}/></button></div>}
             {hoverId && !drawing && !candidateUrl && <div className="hover-label"><span className="hover-indicator"/>{map.parts.find(p => p.id === hoverId)?.name_th} <span>{hoverId}</span></div>}
-            <div className="canvas-bottom"><div><span className="coordinate-icon">⊞</span> NORMALIZED REGION SYSTEM <strong>0—1000</strong></div><div><span className="green-small"/> PNG MASTER <span className="bottom-divider"/> <strong>V{version}</strong></div></div>
+            <div className="canvas-bottom"><div><span className="coordinate-icon">⊞</span> {imageUrl ? (panning ? 'กำลังจับลาก Canvas ด้วยเมาส์กลาง…' : canvasFocused ? 'WHEEL ZOOM: 25%–1000% · MIDDLE MOUSE: PAN · + / − / 0' : 'คลิก Canvas เพื่อเปิด WHEEL ZOOM · กดล้อเมาส์ค้างเพื่อเลื่อน Canvas') : 'AWAITING IMAGE IMPORT'}</div><div><span className="green-small"/> {imageUrl ? 'PNG MASTER' : 'EMPTY WORKSPACE'} <span className="bottom-divider"/> <strong>V{version}</strong></div></div>
           </div>
 
           <div className="bottom-workbar">
             <div><div className="workbar-title"><Sparkles size={16}/> Prompt-driven part editing</div><div className="workbar-subtitle">กำหนดส่วนที่ต้องการแก้ แล้วคัดลอกคำสั่งพร้อม Region ให้ AI ภายนอก</div></div>
-            <button className="workbar-cta" onClick={() => setTab('ai')}>เปิด AI Part Editor <ChevronRight size={16}/></button>
+            <button className="workbar-cta" disabled={!imageUrl} onClick={() => setTab('ai')}>เปิด AI Part Editor <ChevronRight size={16}/></button>
           </div>
         </main>
 
         <aside className="inspector panel-scroll">
           <div className="inspector-head"><div><span className="eyebrow">WORKSPACE TOOLS</span><h2>Properties <span className="head-dot">.</span></h2></div><div className="inspector-tag"><Tag size={12}/> v1.0</div></div>
-          <div className="tabs">
+          <div className="tabs five-tabs">
             <button className={tab === 'inspect' ? 'current' : ''} onClick={() => setTab('inspect')}><MousePointer2 size={16}/> Inspect</button>
             <button className={tab === 'tag' ? 'current' : ''} onClick={() => setTab('tag')}><PenLine size={16}/> Tag</button>
+            <button className={tab === 'shape' ? 'current' : ''} onClick={() => setTab('shape')}><Shapes size={16}/> Shape</button>
             <button className={tab === 'ai' ? 'current' : ''} onClick={() => setTab('ai')}><WandSparkles size={16}/> AI Edit</button>
             <button className={tab === 'docs' ? 'current' : ''} onClick={() => setTab('docs')}><BookOpenText size={16}/> MD</button>
           </div>
@@ -456,6 +776,19 @@ function App() {
             </> : <EmptySelection onAdd={addPart}/>}
           </div>}
 
+          {tab === 'shape' && <ShapeToolPanel
+            imageLoaded={Boolean(imageUrl)} imageName={imageName} activePart={regionsApproved ? activePart : null}
+            target={shapeTarget} source={shapeSource} drawing={shapeDrawing} draftLength={shapeDraft.length}
+            values={shapeValues} onValues={setShapeValues} onFromPart={shapeFromSelectedPart} onStart={startShapeDrawing}
+            onFinish={finishShapeDrawing} onCancel={()=>{setShapeDrawing(false);setShapeDraft([]);}} onClear={resetShape}
+            partDescription={shapePartName} onDescription={setShapePartName} editInstruction={shapeInstruction} onInstruction={setShapeInstruction}
+            prompt={shapePrompt} hasMasterPng={Boolean(masterBlob)} hasGuidePng={Boolean(shapeBlob)}
+            onCopyMaster={()=>{void copyShapeImage('original');}} onCopyGuide={()=>{void copyShapeImage('guide');}}
+            onCopyPrompt={()=>{void copyText(shapePrompt);notify('คัดลอก Prompt แล้ว — ไปวางใน ChatGPT หลังวางรูปทั้งสอง');}}
+            onDownloadGuide={()=>{if(shapeBlob){downloadBlob(`${basename(imageName||'character')}_shape_guide.png`,shapeBlob);notify('ดาวน์โหลด Shape Guide PNG แล้ว');}}}
+            onOpenChatGpt={()=>{window.open('https://chatgpt.com/','_blank','noopener,noreferrer');}}
+          />}
+
           {tab === 'ai' && <div className="inspector-body">
             <div className="section-kicker">AI PART EDITOR <span>PROMPT-ONLY MVP</span></div>
             <div className="ai-feature"><div className="ai-feature-icon"><WandSparkles size={21}/></div><div><h3>เปลี่ยนเฉพาะส่วนที่เลือก</h3><p>เตรียม Prompt + JSON + Mask เพื่อส่งเข้า AI ภายนอก โดยรักษาส่วนอื่นของภาพ</p></div></div>
@@ -480,8 +813,19 @@ function App() {
           {tab === 'docs' && <div className="inspector-body">
             <div className="section-kicker">SPECIFICATION DOCUMENT <span>MARKDOWN</span></div>
             <div className="doc-summary"><FileText size={24}/><div><h3>{documentFilename || 'ยังไม่ได้เลือก MD'}</h3><p>{docsText.length.toLocaleString()} ตัวอักษร · {map.parts.length} Tags</p></div></div>
-            <p className="editor-explain">ระบบอ่านบล็อก <code>```character-map</code> ที่อยู่ใน MD เพื่อตีขอบเขตภาพ แล้วแสดงข้อมูลสี/วัสดุ/เทคนิคจากข้อมูลเดียวกัน</p>
-            <div className="doc-actions"><button onClick={downloadTemplate}><Download size={15}/> AI Template</button><button onClick={() => {void copyText(makeMappingPrompt());notify('คัดลอกคำสั่งให้ AI ทำ Mapping แล้ว');}}><Copy size={15}/> คำสั่ง AI</button></div>
+            {pendingMap && <div className="map-validation-card">
+              <div className="map-validation-head"><AlertTriangle size={19}/><strong>{imageUrl ? 'ไฟล์ MD ไม่ตรงกับรูปปัจจุบัน' : 'กำลังรอภาพต้นฉบับของ MD'}</strong></div>
+              <p>MD มี {pendingMap.value.parts.length} Tags · อ้างอิง {pendingMap.value.image.width}×{pendingMap.value.image.height}px · ชื่อรูป: {pendingMap.value.image.file || 'ไม่ได้ระบุ'}</p>
+              {pendingCompatibility?.errors.map((message,i)=><p key={`err-${i}`} className="map-issue">{message}</p>)}
+              {pendingCompatibility?.warnings.map((message,i)=><p key={`warn-${i}`} className="map-issue">{message}</p>)}
+              <p><strong>วิธีแก้:</strong> นำเข้ารูปที่ AI ใช้สร้าง MD นี้จริง ๆ หรือคัดลอกคำสั่งด้านล่างไปให้ AI ทำ MD ใหม่โดยอ้างอิงภาพ PNG ปัจจุบันเท่านั้น</p>
+              <div className="map-validation-actions"><button onClick={()=>imageInput.current?.click()}><ImageIcon size={15}/> นำเข้ารูปที่ตรง MD</button><button disabled={!imageUrl} onClick={()=>{void copyText(makeMappingRepairPrompt({...imageSize,name:imageName},pendingMap.value));notify('คัดลอกคำสั่งแก้ MD แล้ว — แนบ PNG ปัจจุบันกับ Template ส่ง AI');}}><Copy size={15}/> Copy คำสั่งแก้ MD</button></div>
+              <button className="map-clear-pending" onClick={()=>{setPendingMap(null);setDocsText('');setDocumentFilename('');notify('ยกเลิก MD ที่ไม่ตรงภาพแล้ว');}}>ยกเลิก MD นี้</button>
+            </div>}
+            {mapWarnings.length>0 && <div className="map-validation-card"><strong>สิ่งที่ต้องตรวจใน Mapping</strong>{mapWarnings.map((text,i)=><p key={`warning-${i}`} className="map-issue">{text}</p>)}{!regionsApproved && <button className="map-review-button" onClick={()=>{qualityAcceptedRef.current=true;setRegionsApproved(true);notify('ยืนยันแสดง Region แล้ว — โปรดตรวจรูปทรงบน Canvas ทีละ Tag');}}>ฉันตรวจแล้ว · แสดง Region เพื่อแก้ไข</button>}</div>}
+            {mapQuality?.transparentBackground && <div className={`map-validation-card ${mapQuality.suspicious?'map-validation-danger':''}`}><div className="map-validation-head"><ScanLine size={18}/><strong>Region Alignment Check</strong></div><p>ตรวจการซ้อนทับกับพื้นที่ทึบของ PNG แล้ว {mapQuality.checkedParts} Tags · พบ {mapQuality.outsideParts} Tags ที่อยู่บนพื้นโปร่งใสเกือบทั้งหมด</p><p>เป็นการตรวจเบื้องต้นจาก Alpha ไม่ใช่การ Segmentation ที่แม่นยำ 100%</p>{mapQuality.suspicious && <button className="map-review-button" onClick={()=>{qualityAcceptedRef.current=true;setRegionsApproved(true);}}>ยืนยันแสดง Region เพื่อตรวจด้วยตา</button>}</div>}
+            <p className="editor-explain">ระบบอ่านบล็อก <code>```character-map</code> ที่อยู่ใน MD เพื่อตีขอบเขตภาพ แล้วแสดงข้อมูลสี/วัสดุ/เทคนิคจากข้อมูลเดียวกัน <strong>JSON คือข้อมูลสำหรับโปรแกรมที่ฝังอยู่ใน MD</strong> จึงไม่จำเป็นต้องนำเข้า JSON แยก</p>
+            <div className="doc-actions"><button onClick={downloadTemplate}><Download size={15}/> AI Template</button><button onClick={() => {void copyText(makeMappingPrompt());notify('คัดลอกคำสั่งให้ AI ทำ Mapping แล้ว');}}><Copy size={15}/> คำสั่ง AI</button></div><button className="outline-button full" style={{marginTop:10}} onClick={() => goToPage('guide')}><BookOpenText size={15}/> ดูคู่มือครบ 4 ขั้นตอน</button>
             <div className="section-title"><span>DOCUMENT HEADINGS</span><span className="section-rule"/></div>
             <div className="doc-headings">{(docsText.match(/^#{1,3}\s+.+$/gm) ?? []).slice(0,24).map((line,i)=><div key={i}>{line.replace(/^#+\s+/, '')}</div>)}{!docsText && <p>ยังไม่มีไฟล์ MD — Import หรือโหลด Demo</p>}</div>
             <button className="outline-button full" onClick={() => setDocOpen(v => !v)}><BookOpenText size={16}/>{docOpen ? 'ซ่อนเนื้อหา MD' : 'แสดงข้อความ MD'}</button>

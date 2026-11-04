@@ -5,6 +5,11 @@ export const DEFAULT_SHAPE_VALUES: ShapeValues = { width: 100, height: 100, rota
 
 export function cloneRegion(region: Region): Region { return region.map(poly => poly.map(([x,y]) => [x,y] as Point)); }
 
+/** Mirror a region around an adjustable vertical axis (normalized_1000 X). */
+export function mirrorRegion(region: Region, axisX = 500): Region {
+  return region.map(poly => poly.map(([x,y]) => [Math.max(0,Math.min(1000,Math.round(2*axisX-x))),y] as Point).reverse());
+}
+
 export function transformRegion(region: Region, from: ShapeValues, to: ShapeValues): Region {
   const all = region.flat();
   if (!all.length) return cloneRegion(region);

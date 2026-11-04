@@ -1,0 +1,35 @@
+/* v0.8: point-editable silhouette polygons, explicit per-frame layer stacking. */
+.rig-v08-editor-tabs {display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0 4px;}
+.rig-v08-editor-tabs button {display:flex;justify-content:center;align-items:center;gap:7px;padding:12px 7px;border:1px solid #4b6968;background:#26343c;color:#bedbd2;border-radius:8px;font-size:12px;font-weight:650;cursor:pointer;}
+.rig-v08-editor-tabs button.active {background:#a6ead0;border-color:#c5ffe5;color:#163a31;box-shadow:0 0 0 1px #bcead817;}
+.rig-v08-editor-tabs button:hover:not(.active) {background:#304a48;}
+.rig-v08-polygon-editor {margin:13px 0;padding:12px;background:#172f34;border:1px solid #79ac98;border-radius:9px;}
+.rig-v08-polygon-head {display:flex;align-items:center;gap:8px;color:#b9f4d3;font-size:13px;line-height:1.5;}
+.rig-v08-polygon-editor p {font-size:12px;line-height:1.8;color:#c4dfd4;margin:9px 0;}
+.rig-v08-polygon-editor small {display:block;font-size:11px;line-height:1.8;color:#accdbe;padding-top:8px;}
+.rig-v08-convert {display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:43px;padding:10px;border:1px solid #b3ebcc;border-radius:8px;background:#a2edc8;color:#183c31;font-size:12px;font-weight:700;cursor:pointer;}
+.rig-v08-convert:hover {background:#c5ffdc;}
+.rig-v08-draw-new,.rig-v08-draw-cancel {display:flex;align-items:center;justify-content:center;gap:7px;width:100%;min-height:39px;border:1px dashed #87b8aa;background:#24403c;color:#caefdd;border-radius:7px;padding:9px;font-size:11px;cursor:pointer;margin-top:9px;}
+.rig-v08-draw-new:hover {background:#32574b;}
+.rig-v08-draw-cancel {color:#f4d1c1;border-color:#a57967;}
+.rig-v08-polygon-actions {display:grid;grid-template-columns:1fr 1fr;gap:7px;}
+.rig-v08-polygon-actions button {border:1px solid #709b8c;border-radius:7px;background:#2a5046;color:#dcf4e5;min-height:43px;padding:7px;font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;}
+.rig-v08-polygon-actions button.active {background:#c8edd0;color:#1c4031;border-color:#deffda;}
+.rig-v08-polygon-actions button:disabled {opacity:.42;cursor:not-allowed;}
+.rig-v08-layers-panel {padding:15px 13px;background:linear-gradient(165deg,#273c38,#212f39 75%);border:1px solid #78b99d;border-radius:11px;}
+.rig-v08-layers-panel .rig-v07-section-head {margin-bottom:14px;}
+.rig-v08-layers-panel .form-input {background:#172b33;border-color:#5b7a76;}
+.rig-v08-order-status {padding:10px 12px;margin:12px 0;border:1px solid #548978;border-radius:8px;background:#1a373a;color:#c7e2d7;font-size:12px;line-height:1.6;}
+.rig-v08-order-status strong {color:#b8f8d6;}
+.rig-v08-depth-quick,.rig-v08-copy-order {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:9px 0 15px;}
+.rig-v08-depth-quick button,.rig-v08-copy-order button {background:#2c5046;color:#d7f3e2;border:1px solid #639581;border-radius:7px;min-height:44px;padding:8px 5px;font-size:11px;cursor:pointer;line-height:1.6;}
+.rig-v08-depth-quick button:hover,.rig-v08-copy-order button:hover {background:#3c6656;}
+.rig-v08-copy-order {border-top:1px solid #466363;padding-top:12px;}
+.rig-v08-layers-panel .rig-draw-order-list {max-height:245px;}
+.cutout-mask-outline.selected.adding {stroke:#f8d784;stroke-width:7;stroke-dasharray:5 6;cursor:crosshair;}
+.cutout-polygon-vertex {pointer-events:all;cursor:grab;fill:#c9ffdc;stroke:#124c43;stroke-width:3;vector-effect:non-scaling-stroke;filter:drop-shadow(0 1px 2px #122b27);}
+.cutout-polygon-vertex.active {fill:#ffe092;stroke:#5c4624;cursor:grabbing;}
+.rig-v08-drawing-hitbox {pointer-events:all;cursor:crosshair;}
+.rig-v08-drawing-line {stroke:#b5ffd4;stroke-width:3;stroke-dasharray:8 5;fill:none;vector-effect:non-scaling-stroke;pointer-events:none;}
+.rig-v08-drawing-point {fill:#ffe3a3;stroke:#2e624f;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none;}
+@media(max-width:480px){.rig-v08-editor-tabs button{padding:12px 3px;font-size:11px;gap:5px;}}

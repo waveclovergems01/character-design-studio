@@ -1,0 +1,45 @@
+/* v0.10: separate Bone edit, Polygon mask, anatomically constrained weight paint, Depth. */
+.rig-v10-editor-tabs {grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;}
+.rig-v09-pinned .rig-v10-editor-tabs button {min-height:38px;flex-direction:column;gap:2px;font-size:10px;padding:5px 1px;}
+.rig-v10-bone-panel,.rig-v10-weight-editor {padding:13px;background:linear-gradient(160deg,#203b38,#1b2e36);border:1px solid #6fae98;border-radius:10px;display:flex;flex-direction:column;gap:11px;color:#d7eee5;}
+.rig-v10-section-title {display:flex;align-items:center;gap:9px;color:#aaf1ca;}
+.rig-v10-section-title h3 {font-size:14px;line-height:1.35;font-weight:700;color:#e3fff1;}
+.rig-v10-section-title p {font-size:11px;line-height:1.5;color:#a8cbbd;}
+.rig-v10-bone-toggles,.rig-v10-quick-toggles {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;border-bottom:1px solid #4b7064;padding:8px 0;}
+.rig-v10-bone-toggles .rig-toggle {white-space:nowrap;font-size:11px;}
+.rig-v10-mirror {display:flex;align-items:flex-start;flex-wrap:wrap;gap:7px;font-size:11px;}
+.rig-v10-mirror small {display:block;font-size:10px;color:#9cb9ad;}
+.rig-v10-bone-state {padding:9px;border:1px solid #608c7a;border-radius:7px;background:#19302f;color:#b3efd1;letter-spacing:.4px;font-size:10px;text-align:center;font-weight:750;}
+.rig-v10-bone-panel .rig-joint-list {max-height:260px;overflow:auto;}
+.rig-v10-bone-layer.ghost {opacity:.17;pointer-events:none;}
+.rig-v10-bone-layer.locked {opacity:.56;pointer-events:none;}
+.rig-v10-bone-layer.editing {opacity:1;}
+.rig-v10-weight-overlay {opacity:.70;pointer-events:none;}
+.rig-v10-brush-ring {fill:#bfffe019;stroke:#baffce;stroke-width:2.2;stroke-dasharray:7 5;vector-effect:non-scaling-stroke;filter:drop-shadow(0 0 2px #092b1b);pointer-events:none;}
+.rig-v10-paint-cursor {cursor:crosshair;}
+.rig-v10-weight-editor .mode-field-label {margin:2px 0 0;color:#cce8dc;font-size:11px;}
+.rig-v10-weight-editor .form-input {min-width:0;background:#152a30;border-color:#659b87;font-size:11px;}
+.rig-v10-weight-status {padding:9px;border:1px solid #577d6d;background:#173531;display:flex;gap:6px;align-items:center;border-radius:8px;font-size:10px;flex-wrap:wrap;}
+.rig-v10-weight-status strong {flex:1;white-space:nowrap;}
+.rig-v10-weight-status>span {width:7px;height:7px;border-radius:50%;background:#78968b;}
+.rig-v10-weight-status>span.live {background:#80f6b1;box-shadow:0 0 9px #6bfca8;}
+.rig-v10-weight-status label {display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:700;}
+.rig-v10-weight-status input,.rig-v10-weight-editor .rig-toggle input {accent-color:#9deac8;}
+.rig-v10-heat-key {display:flex;align-items:center;gap:8px;font-size:10px;color:#c3dccd;}
+.rig-v10-heat-gradient {height:15px;flex:1;border:1px solid #a2aa9b;border-radius:5px;background:linear-gradient(90deg,#305af0 0%,#26c6fa 25%,#45d66c 50%,#f4d64e 75%,#ed4646 100%);}
+.rig-v10-mini-note {font-size:11px;color:#a7c8bc;line-height:1.7;}
+.rig-v10-brush-options {border:1px solid #54796b;border-radius:9px;padding:11px;display:flex;flex-direction:column;gap:8px;background:#192e31;}
+.rig-v10-brush-options>label:not(.mode-field-label),.rig-v10-auto-tools>label {font-size:11px;display:flex;align-items:center;justify-content:space-between;gap:8px;color:#c5e8d8;}
+.rig-v10-brush-options input,.rig-v10-auto-tools input {width:100%;accent-color:#9ee2be;}
+.rig-v10-brush-modes {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;}
+.rig-v10-brush-modes button {display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:44px;font-size:10px;border:1px solid #617d73;border-radius:7px;background:#2c4545;color:#d4eee2;gap:3px;}
+.rig-v10-brush-modes button.active {color:#1a4030;background:#a7e7c7;border-color:#c9ffe3;}
+.rig-v10-auto-tools {border:1px solid #577e74;background:#1a3234;border-radius:9px;padding:11px;display:flex;flex-direction:column;gap:10px;}
+.rig-v10-auto-tools .rig-v10-section-title h3 {font-size:13px;}
+.rig-v10-auto-tools .rig-v10-section-title p {font-size:10px;}
+.rig-v10-auto-button,.rig-v10-reset-button {padding:10px;border-radius:7px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;}
+.rig-v10-auto-button {background:#a3e9c5;color:#14372d;}
+.rig-v10-auto-button:hover {background:#caf9df;}
+.rig-v10-reset-button {background:#2b4846;border:1px solid #688a7c;color:#bfefdd;}
+.rig-v10-reset-button:disabled {opacity:.48;cursor:not-allowed;}
+@media(max-width:1080px){.rig-v09-pinned .rig-v10-editor-tabs button{font-size:9px;}}

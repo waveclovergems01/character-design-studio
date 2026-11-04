@@ -1,4 +1,4 @@
-import { Check, Copy, Download, ExternalLink, MousePointer2, PenLine, RotateCcw, ScanLine, Sparkles } from 'lucide-react';
+import { Check, Copy, Download, ExternalLink, MousePointer2, PenLine, RotateCcw, ScanLine, Sparkles, Pipette, FlipHorizontal } from 'lucide-react';
 import type { CharacterPart, Region } from '../lib/types';
 import type { ShapeValues } from '../lib/shape-guide';
 
@@ -17,6 +17,14 @@ type Props = {
   onFinish: () => void;
   onCancel: () => void;
   onClear: () => void;
+  mirror:boolean;
+  mirrorAxis:number;
+  onMirror:(value:boolean)=>void;
+  onMirrorAxis:(value:number)=>void;
+  wandActive:boolean;
+  onWand:()=>void;
+  wandTolerance:number;
+  onWandTolerance:(value:number)=>void;
   partDescription: string;
   onDescription: (value: string) => void;
   editInstruction: string;
@@ -46,6 +54,9 @@ export default function ShapeToolPanel(props: Props) {
     <div className="section-title"><span>1 / เลือกพื้นที่</span><span className="section-rule"/></div>
     <p className="shape-help">หาก MD ตรงภาพแล้วให้เลือก Tag ทางซ้าย หรือวาด Polygon ใหม่เองได้เลย <strong>แม้ไม่มี MD</strong></p>
     <div className="shape-action-row"><button disabled={!canUsePart} onClick={props.onFromPart}><MousePointer2 size={15}/> จาก Tag ที่เลือก</button><button disabled={!props.imageLoaded} onClick={props.onStart}><PenLine size={15}/> วาดพื้นที่เอง</button></div>
+    <button className={`shape-wand-button ${props.wandActive?'active':''}`} disabled={!props.imageLoaded} onClick={props.onWand}><Pipette size={16}/>{props.wandActive?'กำลังเลือกสีบนรูป — คลิกพื้นที่':'จับขอบสีอัตโนมัติ (Magic Wand)'}</button>
+    <Slider title="ความใกล้เคียงของสี" value={props.wandTolerance} min={12} max={110} unit="" onChange={props.onWandTolerance}/>
+    <p className="shape-help">Magic Wand เลือกพื้นที่สีต่อเนื่องจากจุดที่คลิก แล้วสร้างเส้นรอบนอกแบบประมาณ <strong>ไม่ได้รู้ว่าเป็นแขนหรือขา</strong> เสมอไป หากเลือกเกินให้ลดความใกล้เคียงหรือใช้วาดเอง</p>
     {props.drawing && <div className="shape-drawing"><strong>กำลังวาด {props.draftLength} จุด</strong><p>คลิกลงบนรูป 3 จุดขึ้นไป แล้วกดจบรูปทรง</p><div><button disabled={props.draftLength<3} onClick={props.onFinish}><Check size={14}/> จบรูปทรง</button><button onClick={props.onCancel}>ยกเลิก</button></div></div>}
     {hasShape && <>
       <div className="shape-current"><span>มี Target Polygon {props.target.length} รูปร่าง</span><button onClick={props.onClear}><RotateCcw size={13}/> เริ่มใหม่</button></div>
@@ -58,6 +69,7 @@ export default function ShapeToolPanel(props: Props) {
         <Slider title="เลื่อนแนวนอน" value={props.values.offsetX} min={-200} max={200} unit="" onChange={v=>props.onValues({...props.values,offsetX:v})}/>
         <Slider title="เลื่อนแนวตั้ง" value={props.values.offsetY} min={-200} max={200} unit="" onChange={v=>props.onValues({...props.values,offsetY:v})}/>
       </div>
+      <div className="shape-mirror-box"><label><FlipHorizontal size={17}/> <strong>Mirror รูปทรงอีกข้าง</strong><input type="checkbox" checked={props.mirror} onChange={e=>props.onMirror(e.target.checked)}/></label><p>ใช้กับแขน ขา หรืออุปกรณ์สมมาตรเท่านั้น ไม่ควรเปิดเมื่อวาดทรงผม/ใบหน้าไม่สมมาตร</p>{props.mirror&&<Slider title="แกนกึ่งกลางแนวตั้ง (X)" value={props.mirrorAxis} min={350} max={650} unit="" onChange={props.onMirrorAxis}/>}</div>
       <div className="section-title"><span>3 / ระบุส่วนและคำสั่ง</span><span className="section-rule"/></div>
       <label className="shape-label">ชิ้นส่วนที่ต้องแก้</label><input className="form-input" value={props.partDescription} onChange={e=>props.onDescription(e.target.value)} placeholder="เช่น ขาซ้ายของตัวละคร"/>
       <label className="shape-label">ต้องการให้ AI แก้อย่างไร?</label><textarea rows={4} className="form-textarea" value={props.editInstruction} onChange={e=>props.onInstruction(e.target.value)} placeholder="เช่น ทำขาให้ยาวขึ้นและกางออก แต่รักษาสีและชุดเกราะเดิม"/>

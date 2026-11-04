@@ -26,7 +26,7 @@ export default function HomePage({ onOpenStudio, onOpenWorkspace, onOpenExample,
     <main>
       <section className="home-hero">
         <div className="home-hero-copy">
-          <div className="home-eyebrow"><span className="home-pulse"/> THE CREATIVE WORKSPACE <span className="home-hyphen"/> VERSION 0.4</div>
+          <div className="home-eyebrow"><span className="home-pulse"/> THE CREATIVE WORKSPACE <span className="home-hyphen"/> VERSION 0.11</div>
           <h1>Character design,<br/><span>under control.</span></h1>
           <h2>ให้ทุกรายละเอียดของตัวละคร<br/>มีตำแหน่ง สี และคำอธิบายที่ชัดเจน</h2>
           <p>นำเข้าภาพและ Markdown Spec เพื่อแบ่งชิ้นส่วนแบบ Interactive คลิกตรวจสีและเทคนิคการวาด ปรับ Region และสร้างคำสั่งให้ AI แก้เฉพาะส่วนที่เลือก</p>

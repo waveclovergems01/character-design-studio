@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeEvent } from 'react';
-import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Eye, Film, Grid2X2, ImagePlus, Images, Info, Pause, Play, RotateCcw, ScanEye, Upload, X } from 'lucide-react';
-import { clampPreviewCount, orderedFrameNames, spriteCell } from '../lib/animation-preview';
+import type { ChangeEvent, DragEvent as ReactDragEvent } from 'react';
+import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Eye, Film, GripVertical, Grid2X2, ImagePlus, Images, Info, Pause, Play, Plus, RotateCcw, ScanEye, Trash2, Upload, X } from 'lucide-react';
+import { clampPreviewCount, combinePreviewFrames, movePreviewFrame, orderedFrameNames, spriteCell } from '../lib/animation-preview';
 
 type Raster={name:string;url:string;image:HTMLImageElement;width:number;height:number};
 type SourceMode='individual'|'sheet';
 type Anchor='bottom'|'center';
-type FrameSource={raster:Raster;region:{x:number;y:number;width:number;height:number}};
+type FrameSource={id:number;raster:Raster;region:{x:number;y:number;width:number;height:number};sourceKind:SourceMode;displayName:string};
+type ImportAction='append'|'replace';
 const STAGE_WIDTH=850,STAGE_HEIGHT=600;
 const emptySlots=(count:number)=>Array.from({length:count},(_,i)=>i);
 
@@ -35,13 +36,13 @@ function FrameThumb({source,index}:{source:FrameSource|null;index:number}){
 
 export default function AnimationPreviewWorkspace({active=true}:{active?:boolean}){
   const [sourceMode,setSourceMode]=useState<SourceMode>('individual');
-  const [imageFrames,setImageFrames]=useState<(Raster|null)[]>([]);
-  const framesRef=useRef<(Raster|null)[]>([]);
-  const [sheet,setSheet]=useState<Raster|null>(null);
-  const sheetRef=useRef<Raster|null>(null);
+  const [frames,setFrames]=useState<(FrameSource|null)[]>([]);
+  const framesRef=useRef<(FrameSource|null)[]>([]);
   const [frameCount,setFrameCount]=useState(8);
   const [columns,setColumns]=useState(4);
   const [rows,setRows]=useState(2);
+  const [sheetImportCount,setSheetImportCount]=useState(8);
+  const [lastSheet,setLastSheet]=useState<{name:string;width:number;height:number}|null>(null);
   const [fps,setFps]=useState(8);
   const [frameIndex,setFrameIndex]=useState(0);
   const [playing,setPlaying]=useState(false);
@@ -59,66 +60,100 @@ export default function AnimationPreviewWorkspace({active=true}:{active?:boolean
   const sheetInput=useRef<HTMLInputElement>(null);
   const replaceInput=useRef<HTMLInputElement>(null);
   const replaceIndex=useRef(0);
+  const importAction=useRef<ImportAction>('append');
   const generation=useRef(0);
-  const sheetGeneration=useRef(0);
+  const nextFrameId=useRef(1);
   const countWasEdited=useRef(false);
+  const [dragging,setDragging]=useState<number|null>(null);
+  const draggingRef=useRef<number|null>(null);
+  const [dropTarget,setDropTarget]=useState<{index:number;side:'before'|'after'}|null>(null);
 
   useEffect(()=>()=>{
     generation.current++;
-    sheetGeneration.current++;
-    framesRef.current.forEach(r=>{if(r)URL.revokeObjectURL(r.url);});
-    if(sheetRef.current)URL.revokeObjectURL(sheetRef.current.url);
+    new Set(framesRef.current.flatMap(frame=>frame?[frame.raster.url]:[])).forEach(url=>URL.revokeObjectURL(url));
   },[]);
 
   useEffect(()=>{if(!active)setPlaying(false);},[active]);
 
+  /** Shared timeline. A single Sprite Sheet URL may be referenced by many frames. */
+  const commitFrames=(next:(FrameSource|null)[])=>{
+    const oldUrls=new Set(framesRef.current.flatMap(frame=>frame?[frame.raster.url]:[]));
+    const newUrls=new Set(next.flatMap(frame=>frame?[frame.raster.url]:[]));
+    oldUrls.forEach(url=>{if(!newUrls.has(url))URL.revokeObjectURL(url);});
+    framesRef.current=next;setFrames(next);
+  };
+  const openImport=(action:ImportAction,kind:SourceMode)=>{
+    if(action==='replace'&&framesRef.current.some(Boolean)&&!window.confirm('นำเข้าชุดใหม่แทนที่รูปทุกเฟรมใน Timeline ใช่หรือไม่?'))return;
+    importAction.current=action;
+    (kind==='individual'?bulkInput:sheetInput).current?.click();
+  };
+  const commitImported=(incoming:FrameSource[],action:ImportAction)=>{
+    const old=action==='replace'?[]:framesRef.current;
+    const remaining=Math.max(0,256-old.length);
+    const used=incoming.slice(0,remaining),ignored=incoming.slice(remaining);
+    const existingUrls=new Set(old.flatMap(frame=>frame?[frame.raster.url]:[]));
+    new Set(ignored.map(frame=>frame.raster.url)).forEach(url=>{if(!existingUrls.has(url)&&!used.some(f=>f.raster.url===url))URL.revokeObjectURL(url);});
+    if(!used.length)return 0;
+    const next=combinePreviewFrames(framesRef.current,used,action);
+    const insertFrom=action==='append'?framesRef.current.length:0;
+    if(action==='replace')countWasEdited.current=false;
+    commitFrames(next);setFrameCount(prev=>countWasEdited.current?Math.max(prev,next.length):clampPreviewCount(next.length));
+    setFrameIndex(Math.min(255,insertFrom));setPlaying(false);
+    return used.length;
+  };
+  const newFrame=(raster:Raster,kind:SourceMode,region:FrameSource['region'],label:string):FrameSource=>({id:nextFrameId.current++,raster,region,sourceKind:kind,displayName:label});
+
   const takeImages=async(event:ChangeEvent<HTMLInputElement>)=>{
     const files=orderedFrameNames(Array.from(event.currentTarget.files??[]).filter(f=>['image/png','image/jpeg','image/webp'].includes(f.type))).slice(0,256);
     event.currentTarget.value='';if(!files.length)return;
-    const token=++generation.current;setPlaying(false);setBusy(true);setMessage('กำลังอ่านรูปแต่ละเฟรม…');
+    const token=++generation.current,action=importAction.current;
+    setPlaying(false);setBusy(true);setMessage('กำลังอ่านรูปเพื่อเพิ่มใน Timeline…');
     const results=await Promise.allSettled(files.map(readImage));
     const loaded=results.filter((result):result is PromiseFulfilledResult<Raster>=>result.status==='fulfilled').map(result=>result.value);
     if(token!==generation.current){loaded.forEach(r=>URL.revokeObjectURL(r.url));return;}
-    framesRef.current.forEach(r=>{if(r)URL.revokeObjectURL(r.url);});
-    framesRef.current=loaded;setImageFrames(loaded);if(!countWasEdited.current)setFrameCount(clampPreviewCount(loaded.length));setFrameIndex(0);setBusy(false);
-    setMessage(loaded.length===files.length?`นำเข้าสำเร็จ ${loaded.length} ภาพ · เรียงตามเลขในชื่อไฟล์`:`นำเข้าได้ ${loaded.length}/${files.length} ภาพ · ตรวจไฟล์ที่เปิดไม่ได้`);
+    const entries=loaded.map(image=>newFrame(image,'individual',{x:0,y:0,width:image.width,height:image.height},image.name));
+    const accepted=commitImported(entries,action);
+    setBusy(false);
+    if(action==='replace'&&accepted)setLastSheet(null);
+    setMessage(accepted?`${action==='append'?'เพิ่ม':'แทนที่ทั้งหมดด้วย'} ${accepted} ภาพ · ${accepted<files.length?'บางรูปเกินขีดจำกัด 256 เฟรม หรือเปิดไม่ได้':'เรียงลำดับตามชื่อไฟล์'}`:loaded.length?'ไม่พบช่องว่างสำหรับเพิ่มรูปแล้ว (สูงสุด 256 เฟรม)':'ไม่สามารถเปิดไฟล์รูปที่เลือกได้');
   };
 
   const replaceFrame=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.currentTarget.files?.[0];event.currentTarget.value='';if(!file)return;
-    const target=replaceIndex.current;
+    const target=replaceIndex.current,token=generation.current;
     try{
-      const image=await readImage(file),next=[...framesRef.current];
-      if(next[target])URL.revokeObjectURL(next[target]!.url);
-      next[target]=image;framesRef.current=next;setImageFrames(next);setFrameIndex(target);setPlaying(false);
-      setMessage(`กำหนด ${file.name} เป็นเฟรม ${target+1} แล้ว`);
+      const raster=await readImage(file);
+      if(token!==generation.current){URL.revokeObjectURL(raster.url);return;}
+      const next=Array.from({length:Math.max(framesRef.current.length,target+1)},(_,index)=>framesRef.current[index]??null);
+      next[target]=newFrame(raster,'individual',{x:0,y:0,width:raster.width,height:raster.height},raster.name);
+      commitFrames(next);setFrameIndex(target);setPlaying(false);
+      setMessage(`แทนที่เฟรม ${target+1} ด้วย ${file.name} แล้ว`);
     }catch{setMessage('ไฟล์นี้ไม่สามารถเปิดเป็นรูปภาพได้');}
   };
 
   const takeSheet=async(event:ChangeEvent<HTMLInputElement>)=>{
     const file=event.currentTarget.files?.[0];event.currentTarget.value='';if(!file)return;
-    const token=++sheetGeneration.current;
+    const token=++generation.current,action=importAction.current;
+    setBusy(true);setPlaying(false);setMessage('กำลังแบ่งช่อง Sprite Sheet…');
     try{
-      setBusy(true);setPlaying(false);
-      const loaded=await readImage(file);
-      if(token!==sheetGeneration.current){URL.revokeObjectURL(loaded.url);return;}
-      if(sheetRef.current)URL.revokeObjectURL(sheetRef.current.url);
-      sheetRef.current=loaded;setSheet(loaded);setFrameIndex(0);setBusy(false);
-      setMessage(`เปิด Sprite Sheet ${file.name} (${loaded.width} × ${loaded.height} px) แล้ว`);
-    }catch{setBusy(false);setMessage('ไม่สามารถอ่านภาพ Sprite Sheet ได้');}
+      const raster=await readImage(file);
+      if(token!==generation.current){URL.revokeObjectURL(raster.url);return;}
+      const count=Math.min(columns*rows,sheetImportCount,256);
+      const entries=Array.from({length:count},(_,index)=>{
+        const region=spriteCell(raster.width,raster.height,columns,rows,index);
+        return region?newFrame(raster,'sheet',region,`${raster.name} · ช่อง ${index+1}`):null;
+      }).filter((frame):frame is FrameSource=>frame!==null);
+      const accepted=commitImported(entries,action);
+      if(!accepted)URL.revokeObjectURL(raster.url);
+      if(accepted)setLastSheet({name:raster.name,width:raster.width,height:raster.height});
+      setBusy(false);
+      setMessage(accepted?`${action==='append'?'เพิ่ม':'แทนที่ Timeline ด้วย'} ${accepted} เฟรมจาก ${raster.name} แล้ว`:'ไม่มีช่องว่างเพียงพอสำหรับ Sprite Sheet นี้');
+    }catch{if(token===generation.current){setBusy(false);setMessage('ไม่สามารถอ่านภาพ Sprite Sheet ได้');}}
   };
 
-  const resolveFrame=(index:number):FrameSource|null=>{
-    if(sourceMode==='individual'){
-      const raster=imageFrames[index];return raster?{raster,region:{x:0,y:0,width:raster.width,height:raster.height}}:null;
-    }
-    if(!sheet)return null;
-    const region=spriteCell(sheet.width,sheet.height,columns,rows,index);
-    return region?{raster:sheet,region}:null;
-  };
-
+  const resolveFrame=(index:number):FrameSource|null=>frames[index]??null;
   const current=resolveFrame(frameIndex),previous=resolveFrame(frameIndex===0?frameCount-1:frameIndex-1);
-  const available=sourceMode==='individual'?imageFrames.slice(0,frameCount).filter(Boolean).length:sheet?Math.min(frameCount,columns*rows):0;
+  const available=frames.slice(0,frameCount).filter(Boolean).length;
   const sheetCapacity=columns*rows;
 
   useEffect(()=>{
@@ -164,15 +199,54 @@ export default function AnimationPreviewWorkspace({active=true}:{active?:boolean
     }
   },[current?.raster,current?.region.x,current?.region.y,current?.region.width,current?.region.height,previous?.raster,previous?.region.x,previous?.region.y,previous?.region.width,previous?.region.height,zoom,smooth,anchor,onion,showGuides]);
 
-  const chooseMode=(next:SourceMode)=>{setSourceMode(next);setPlaying(false);setFrameIndex(0);setMessage('');};
+  const chooseMode=(next:SourceMode)=>{setSourceMode(next);setPlaying(false);setMessage('');};
   const setCount=(v:number)=>{countWasEdited.current=true;const count=clampPreviewCount(v);setFrameCount(count);setFrameIndex(i=>Math.min(i,count-1));};
   const goFrame=(index:number)=>{setFrameIndex(Math.max(0,Math.min(frameCount-1,index)));};
   const swapSelected=(delta:number)=>{
     const target=frameIndex+delta;
     if(target<0||target>=frameCount)return;
-    const next=[...framesRef.current];[next[frameIndex],next[target]]=[next[target]??null,next[frameIndex]??null];
-    framesRef.current=next;setImageFrames(next);setFrameIndex(target);setPlaying(false);
+    const next=Array.from({length:Math.max(frameCount,framesRef.current.length)},(_,index)=>framesRef.current[index]??null);
+    [next[frameIndex],next[target]]=[next[target],next[frameIndex]];
+    commitFrames(next);setFrameIndex(target);setPlaying(false);
     setMessage(`สลับลำดับเฟรม ${frameIndex+1} กับ ${target+1} แล้ว`);
+  };
+  const removeFrame=(index:number)=>{
+    const next=[...framesRef.current];if(!next[index])return;
+    next.splice(index,1);commitFrames(next);
+    setFrameCount(clampPreviewCount(next.length));
+    setFrameIndex(Math.min(index,Math.max(0,next.length-1)));setPlaying(false);
+    setMessage(`ลบเฟรม ${index+1} ออกจาก Timeline แล้ว · เฟรมที่เหลือเลื่อนเข้ามาแทน`);
+  };
+  const clearAll=()=>{
+    if(!framesRef.current.some(Boolean))return;
+    if(!window.confirm('ล้างรูปทั้งหมดใน Animation Timeline? จะต้องนำเข้ารูปใหม่อีกครั้ง'))return;
+    generation.current++;commitFrames([]);setFrameCount(8);setFrameIndex(0);setPlaying(false);setBusy(false);
+    countWasEdited.current=false;setLastSheet(null);setMessage('ล้างรูปทุกเฟรมแล้ว พร้อมนำเข้าชุดใหม่');
+  };
+  const startDragging=(event:ReactDragEvent<HTMLDivElement>,index:number)=>{
+    if(!frames[index])return;
+    draggingRef.current=index;setDragging(index);setPlaying(false);
+    event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',String(index));
+  };
+  const overFrame=(event:ReactDragEvent<HTMLDivElement>,index:number)=>{
+    if(draggingRef.current===null)return;
+    event.preventDefault();event.dataTransfer.dropEffect='move';
+    const rect=event.currentTarget.getBoundingClientRect();
+    const side=event.clientX<rect.left+rect.width/2?'before':'after';
+    setDropTarget(prev=>prev?.index===index&&prev.side===side?prev:{index,side});
+  };
+  const finishDragging=()=>{draggingRef.current=null;setDragging(null);setDropTarget(null);};
+  const dropFrame=(event:ReactDragEvent<HTMLDivElement>,index:number)=>{
+    event.preventDefault();
+    const from=draggingRef.current;if(from===null||from>=frameCount){finishDragging();return;}
+    const rect=event.currentTarget.getBoundingClientRect();
+    const side=event.clientX<rect.left+rect.width/2?'before':'after';
+    const visible=Array.from({length:frameCount},(_,i)=>framesRef.current[i]??null);
+    const hidden=framesRef.current.slice(frameCount);
+    const result=movePreviewFrame(visible,from,index+(side==='after'?1:0));
+    commitFrames([...result.frames,...hidden]);setFrameIndex(result.index);
+    setMessage(`ย้ายภาพจากเฟรม ${from+1} ไปตำแหน่ง ${result.index+1} แล้ว`);
+    finishDragging();
   };
   const togglePlay=()=>{if(!available)return;if(!loop&&frameIndex>=frameCount-1)setFrameIndex(0);setPlaying(v=>!v);};
   const resetAll=()=>{setPlaying(false);goFrame(0);};
@@ -187,48 +261,53 @@ export default function AnimationPreviewWorkspace({active=true}:{active?:boolean
     <div className="ap-layout">
       <div className="ap-theater">
         <div className="ap-preview-toolbar"><strong><ScanEye size={17}/> LIVE MOTION PREVIEW</strong><span>FRAME {frameIndex+1} / {frameCount}</span><div className="ap-view-toggles"><label><input type="checkbox" checked={checker} onChange={e=>setChecker(e.target.checked)}/> Checker</label><label><input type="checkbox" checked={onion} onChange={e=>setOnion(e.target.checked)}/> Onion skin</label><label><input type="checkbox" checked={showGuides} onChange={e=>setShowGuides(e.target.checked)}/> Guide</label></div></div>
-        <div className={`ap-stage ${checker?'checker':''}`} tabIndex={0} onKeyDown={event=>{
+        <div className={`ap-stage ${checker?'ap-checker-on':''}`} tabIndex={0} onKeyDown={event=>{
           if(event.key==='ArrowLeft'){event.preventDefault();setPlaying(false);goFrame(frameIndex-1);}
           if(event.key==='ArrowRight'){event.preventDefault();setPlaying(false);goFrame(frameIndex+1);}
           if(event.key===' '){event.preventDefault();togglePlay();}
         }} aria-label="พรีวิวรูปภาพ กด Space เพื่อเล่นหรือหยุด และลูกศรเพื่อเปลี่ยนเฟรม">
           <canvas ref={canvasRef} width={STAGE_WIDTH} height={STAGE_HEIGHT}/>
-          {!current&&<div className="ap-stage-empty"><div><Images size={32}/></div><h3>{available?`ยังไม่มีรูปสำหรับเฟรม ${frameIndex+1}`:'นำเข้ารูปเพื่อดู Animation'}</h3><p>{sourceMode==='individual'?'เลือกภาพหลายไฟล์ หรือกดที่ช่องเฟรมด้านล่างเพื่อใส่รูปแยก':'นำเข้า Sprite Sheet และกำหนดคอลัมน์กับแถวที่ต้องการแบ่ง'}</p><button onClick={()=>sourceMode==='individual'?bulkInput.current?.click():sheetInput.current?.click()}><Upload size={15}/> นำเข้ารูป</button></div>}
+          {!current&&<div className="ap-stage-empty"><div><Images size={32}/></div><h3>{available?`ยังไม่มีรูปสำหรับเฟรม ${frameIndex+1}`:'นำเข้ารูปเพื่อดู Animation'}</h3><p>{sourceMode==='individual'?'เลือกภาพหลายไฟล์ หรือกดที่ช่องเฟรมด้านล่างเพื่อใส่รูปแยก':'นำเข้า Sprite Sheet และกำหนดคอลัมน์กับแถวที่ต้องการแบ่ง'}</p><button onClick={()=>openImport('append',sourceMode)}><Upload size={15}/> เพิ่มรูปเข้า Timeline</button></div>}
           <span className="ap-stage-tag">{current?`${current.region.width} × ${current.region.height} px`:'NO FRAME'} <span>·</span> {anchor==='bottom'?'BOTTOM ALIGN':'CENTER ALIGN'}</span>
         </div>
         <div className="ap-playback"><div className="ap-transport"><button aria-label="เฟรมก่อนหน้า" disabled={!available} onClick={()=>{setPlaying(false);goFrame(frameIndex-1);}}><ChevronLeft size={22}/></button><button className="ap-play-button" disabled={!available||busy} onClick={togglePlay}>{playing?<><Pause size={19} fill="currentColor"/> หยุด</>:<><Play size={19} fill="currentColor"/> เล่น</>}</button><button aria-label="เฟรมถัดไป" disabled={!available} onClick={()=>{setPlaying(false);goFrame(frameIndex+1);}}><ChevronRight size={22}/></button><button aria-label="เริ่มต้นใหม่" disabled={!available} onClick={resetAll}><RotateCcw size={17}/></button></div><div className="ap-speed"><label htmlFor="ap-fps-slider">ความเร็ว <strong>{fps} FPS</strong></label><input id="ap-fps-slider" type="range" min="1" max="60" value={fps} onChange={e=>setFps(Number(e.target.value))}/><span>{(1000/fps).toFixed(0)} ms / เฟรม</span></div><label className="ap-loop"><input type="checkbox" checked={loop} onChange={e=>setLoop(e.target.checked)}/> Loop</label></div>
-        <div className="ap-timeline-head"><div><strong>FRAME STRIP</strong><span>คลิกเพื่อหยุดที่เฟรมที่ต้องการ · เลื่อนดูตามแนวนอน</span></div><span>{available} พร้อมใช้งาน</span></div>
-        <div className="ap-timeline">{emptySlots(frameCount).map(index=>{const frame=resolveFrame(index);return <button key={index} className={`ap-frame-tile ${frameIndex===index?'selected':''} ${frame?'filled':'missing'}`} onClick={()=>{setPlaying(false);goFrame(index);}} title={frame?`${index+1}: ${frame.raster.name}`:`เฟรม ${index+1} ยังว่าง`}><FrameThumb index={index} source={frame}/><span>{String(index+1).padStart(2,'0')}{frame?<Check size={13}/>:<ImagePlus size={12}/>}</span></button>;})}</div>
+        <div className="ap-timeline-head"><div><strong>FRAME STRIP</strong><span>คลิกเพื่อดูเฟรม · จับลากการ์ดเพื่อแทรกก่อน/หลัง · กด × เพื่อลบ</span></div><span>{available} พร้อมใช้งาน</span></div>
+        <div className="ap-timeline">{emptySlots(frameCount).map(index=>{const frame=resolveFrame(index);return <div key={frame?.id??`blank-${index}`} draggable={Boolean(frame)} onDragStart={e=>startDragging(e,index)} onDragOver={e=>overFrame(e,index)} onDrop={e=>dropFrame(e,index)} onDragEnd={finishDragging}
+          className={`ap-frame-tile ${frameIndex===index?'selected':''} ${frame?'filled':'missing'} ${dragging===index?'dragging':''} ${dropTarget?.index===index?`drop-${dropTarget.side}`:''}`} title={frame?`${index+1}: ${frame.displayName} (ลากเพื่อจัดลำดับ)`:`เฟรม ${index+1} ยังว่าง`}>
+          <button className="ap-frame-select" onClick={()=>{setPlaying(false);goFrame(index);}} aria-label={`ดูเฟรม ${index+1}${frame?` ${frame.displayName}`:' (ว่าง)'}`}><FrameThumb index={index} source={frame}/><span>{String(index+1).padStart(2,'0')}{frame?<GripVertical size={13}/>:<ImagePlus size={12}/>}</span></button>
+          {frame&&<button className="ap-tile-remove" onClick={e=>{e.stopPropagation();removeFrame(index);}} title={`ลบเฟรม ${index+1}`} aria-label={`ลบเฟรม ${index+1}`}><X size={14}/></button>}
+        </div>;})}</div>
       </div>
 
       <aside className="ap-inspector"><div className="ap-panel-top"><h2><Grid2X2 size={18}/> Input & Slicing</h2><span>NO RIG REQUIRED</span></div>
         <div className="ap-panel-body"><div className="ap-input-mode"><button className={sourceMode==='individual'?'active':''} onClick={()=>chooseMode('individual')}><Images size={16}/> หลายรูป</button><button className={sourceMode==='sheet'?'active':''} onClick={()=>chooseMode('sheet')}><Grid2X2 size={16}/> Sprite Sheet</button></div>
           {sourceMode==='individual'?<div className="ap-upload-section">
             <h3>01 — นำเข้า PNG ทีละเฟรม</h3>
-            <p>เลือกรูปทั้งหมดในครั้งเดียว ระบบจัดลำดับตามหมายเลขชื่อไฟล์ เช่น <code>walk_1.png</code> … <code>walk_8.png</code></p>
-            <button className="ap-upload-main" disabled={busy} onClick={()=>bulkInput.current?.click()}><Upload size={18}/> {imageFrames.filter(Boolean).length?'นำเข้าชุดรูปใหม่':'เลือกรูปหลายไฟล์'}</button>
-            <div className="ap-source-state"><span>รูปที่โหลด</span><strong>{imageFrames.filter(Boolean).length} ภาพ</strong></div>
+            <p>เลือกได้หลายครั้ง ระบบเรียงรูปตามชื่อไฟล์ เช่น <code>walk_1.png</code> … <code>walk_8.png</code> และต่อเข้ากับเฟรมเดิมได้</p>
+            <button className="ap-upload-main" disabled={busy||framesRef.current.length>=256} onClick={()=>openImport('append','individual')}><Plus size={18}/> เพิ่มรูปเข้าชุดปัจจุบัน</button>
+            <button className="ap-replace-main" disabled={busy} onClick={()=>openImport('replace','individual')}><Upload size={15}/> นำเข้าชุดใหม่ (แทนที่ทั้งหมด)</button>
+            <div className="ap-source-state"><span>รวมทุกแหล่ง</span><strong>{frames.filter(Boolean).length} ภาพ</strong></div>
             <div className="ap-edit-slots">
-              <div><strong>จัดการแต่ละเฟรม</strong><small>เลือกรูปใหม่แทนช่องที่ต้องการ</small></div>
-              <div className="ap-slot-grid">{emptySlots(Math.min(frameCount,64)).map(index=><button key={index} className={imageFrames[index]?'filled':''} onClick={()=>{replaceIndex.current=index;replaceInput.current?.click();}} title={imageFrames[index]?.name??`ใส่รูปเฟรม ${index+1}`}><span>{index+1}</span>{imageFrames[index]?<Check size={12}/>:<ImagePlus size={12}/>}</button>)}</div>
+              <div><strong>แทนรูปเฉพาะเฟรม</strong><small>เลือกหมายเลขเพื่อใส่ PNG ใหม่</small></div>
+              <div className="ap-slot-grid">{emptySlots(Math.min(frameCount,64)).map(index=><button key={index} className={frames[index]?'filled':''} onClick={()=>{replaceIndex.current=index;replaceInput.current?.click();}} title={frames[index]?.displayName??`ใส่รูปเฟรม ${index+1}`}><span>{index+1}</span>{frames[index]?<Check size={12}/>:<ImagePlus size={12}/>}</button>)}</div>
               {frameCount>64&&<small className="ap-muted">แสดงช่องแก้ไข 64 เฟรมแรก; เลื่อนดูทุกเฟรมใน Timeline ด้านซ้ายได้</small>}
             </div>
           </div>:<div className="ap-upload-section">
             <h3>01 — นำเข้า Sprite Sheet</h3>
-            <p>ภาพเดียวมีหลายเฟรม เช่น 4 คอลัมน์ × 2 แถว = 8 ช่อง (หรือใช้เพียง 6 ช่องก็ได้)</p>
-            <button className="ap-upload-main" disabled={busy} onClick={()=>sheetInput.current?.click()}><Upload size={18}/> {sheet?'เปลี่ยน Sprite Sheet':'เลือกภาพ Sprite Sheet'}</button>
-            {sheet&&<div className="ap-sheet-file"><ImagePlus size={16}/><div><strong title={sheet.name}>{sheet.name}</strong><small>{sheet.width} × {sheet.height} px</small></div></div>}
+            <p>ตั้งกริดสำหรับ <strong>ชีตที่จะนำเข้าครั้งนี้</strong> เช่น 4×2 มี 8 ช่อง แต่เลือกเพิ่มเพียง 6 ช่องได้ นำเข้าชีตอื่นเพิ่มภายหลังได้อีก</p>
             <div className="ap-grid-numbers">
               <label>คอลัมน์ (แนวนอน)<input aria-label="จำนวนคอลัมน์ Sprite Sheet" type="number" min="1" max="64" value={columns} onChange={e=>setColumns(clampPreviewCount(Number(e.target.value),64))}/></label>
               <label>แถว (แนวตั้ง)<input aria-label="จำนวนแถว Sprite Sheet" type="number" min="1" max="64" value={rows} onChange={e=>setRows(clampPreviewCount(Number(e.target.value),64))}/></label>
             </div>
-            <div className="ap-source-state"><span>ช่องทั้งหมด</span><strong>{sheetCapacity} ช่อง</strong></div>
-            {sheet&&columns<=32&&rows<=16&&<div className="ap-sheet-map" style={{gridTemplateColumns:`repeat(${columns},minmax(0,1fr))`}}>{Array.from({length:sheetCapacity},(_,index)=><button key={index} disabled={index>=frameCount} className={`${index===frameIndex?'active':''} ${index>=frameCount?'unused':''}`} onClick={()=>{setPlaying(false);goFrame(index);}} title={`แถว ${Math.floor(index/columns)+1}, คอลัมน์ ${index%columns+1}`}>{index+1}</button>)}</div>}
-            {sheet&&sheetCapacity>512&&<p className="ap-muted">กริดมีจำนวนมาก จึงซ่อนแผนผังย่อไว้</p>}
-            {sheet&&frameCount>sheetCapacity&&<p className="ap-warning">ต้องการ {frameCount} เฟรม แต่กริดมีเพียง {sheetCapacity} ช่อง — เฟรมที่เกินจะแสดงเป็นช่องว่าง</p>}
-            <p className="ap-muted">แบ่งจากซ้ายไปขวา ก่อนลงแถวถัดไป คำนวณตำแหน่งตัดจากขนาดภาพจริง</p>
+            <label className="ap-sheet-count-label">จำนวนช่องจากชีตที่จะเพิ่ม<input aria-label="จำนวนช่องที่นำเข้าจาก Sprite Sheet" type="number" min="1" max={Math.min(256,sheetCapacity)} value={Math.min(sheetImportCount,sheetCapacity,256)} onChange={e=>setSheetImportCount(Math.min(256,sheetCapacity,clampPreviewCount(Number(e.target.value))))}/></label>
+            <div className="ap-source-state"><span>กริดทั้งหมด</span><strong>{sheetCapacity} ช่อง</strong></div>
+            {sheetCapacity<=128&&<div className="ap-sheet-map" style={{gridTemplateColumns:`repeat(${Math.min(columns,32)},minmax(0,1fr))`}}>{Array.from({length:sheetCapacity},(_,index)=><span key={index} className={index<Math.min(sheetImportCount,256)?'used':'unused'}>{index+1}</span>)}</div>}
+            <button className="ap-upload-main" disabled={busy||framesRef.current.length>=256} onClick={()=>openImport('append','sheet')}><Plus size={18}/> เพิ่มเฟรมจาก Sprite Sheet</button>
+            <button className="ap-replace-main" disabled={busy} onClick={()=>openImport('replace','sheet')}><Upload size={15}/> ใช้ชีตใหม่แทนที่ทั้งหมด</button>
+            {lastSheet&&<div className="ap-sheet-file"><ImagePlus size={16}/><div><strong title={lastSheet.name}>นำเข้าล่าสุด: {lastSheet.name}</strong><small>{lastSheet.width} × {lastSheet.height} px</small></div></div>}
+            <p className="ap-muted">กริดและจำนวนช่องมีผลเฉพาะรอบนำเข้าใหม่ เฟรมจากชีตเก่าที่อยู่ใน Timeline จะไม่ถูกตัดซ้ำ</p>
           </div>}
-          {sourceMode==='individual'&&<div className="ap-reorder"><strong>สลับลำดับรูปที่เลือก</strong><div><button disabled={frameIndex<=0} onClick={()=>swapSelected(-1)}><ArrowLeft size={14}/> ย้ายซ้าย</button><button disabled={frameIndex>=frameCount-1} onClick={()=>swapSelected(1)}>ย้ายขวา <ArrowRight size={14}/></button></div></div>}
+          <div className="ap-reorder"><strong>จัดการเฟรมใน Timeline</strong><div><button disabled={frameIndex<=0} onClick={()=>swapSelected(-1)}><ArrowLeft size={14}/> สลับซ้าย</button><button disabled={frameIndex>=frameCount-1} onClick={()=>swapSelected(1)}>สลับขวา <ArrowRight size={14}/></button></div><button className="ap-delete-current" disabled={!current} onClick={()=>removeFrame(frameIndex)}><Trash2 size={14}/> ลบเฟรมที่เลือก</button><button className="ap-clear-all" disabled={!frames.some(Boolean)} onClick={clearAll}><RotateCcw size={14}/> ล้างทุกเฟรม</button></div>
           <div className="ap-settings"><h3>02 — จำนวนเฟรมและเวลา</h3><label>จำนวนเฟรมที่ใช้จริง<input aria-label="จำนวนเฟรมที่ใช้จริง" type="number" min="1" max="256" value={frameCount} onChange={e=>setCount(Number(e.target.value))}/></label><label>ความเร็วภาพต่อวินาที (FPS)<input aria-label="จำนวน FPS" type="number" min="1" max="60" value={fps} onChange={e=>setFps(Math.min(60,Math.max(1,Number(e.target.value)||1)))}/></label></div>
           <details className="ap-advanced"><summary><Eye size={16}/> ตั้งค่าการแสดงผล</summary><div><label>จุดจัดแนวภาพ<select value={anchor} onChange={e=>setAnchor(e.target.value as Anchor)}><option value="bottom">ล่างกึ่งกลาง (เท้าตรงกัน)</option><option value="center">กึ่งกลางภาพ</option></select></label><label>ขนาดพรีวิว <strong>{zoom}%</strong><input type="range" min="25" max="250" step="5" value={zoom} onChange={e=>setZoom(Number(e.target.value))}/></label><label className="ap-check"><input type="checkbox" checked={smooth} onChange={e=>setSmooth(e.target.checked)}/> Smooth Image (ปิดเพื่อดูพิกเซลคม)</label></div></details>
           <div className="ap-note"><Info size={16}/><p>เครื่องมือนี้แสดงภาพที่นำเข้าเท่านั้น <strong>ไม่สร้าง Pose ไม่ย้าย Bone และไม่เปลี่ยนพิกเซลภาพ</strong> ช่วยตรวจความลื่นของการเดิน ความต่างของขนาด และรอยกระโดดระหว่างเฟรม</p></div>

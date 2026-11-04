@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 
 let server;
@@ -56,7 +57,7 @@ try {
   const { default: RigToolPanel } = await server.ssrLoadModule('/src/components/RigToolPanel.tsx');
   const { default: RigExportHub } = await server.ssrLoadModule('/src/components/RigExportHub.tsx');
   const { default: AnimationPreviewWorkspace } = await server.ssrLoadModule('/src/components/AnimationPreviewWorkspace.tsx');
-  const { spriteCell, spriteCells, orderedFrameNames, clampPreviewCount, nextPreviewFrame } = await server.ssrLoadModule('/src/lib/animation-preview.ts');
+  const { spriteCell, spriteCells, orderedFrameNames, clampPreviewCount, nextPreviewFrame, movePreviewFrame, combinePreviewFrames } = await server.ssrLoadModule('/src/lib/animation-preview.ts');
   const { default: WorkspaceModeNav } = await server.ssrLoadModule('/src/components/WorkspaceModeNav.tsx');
   const { initialJoints, makeWalkFrames, makeMotionFrames, resampleRigFrames, makeRigBatchPrompt, defaultNearSide, updateJoint, makeRigPrompt, boneIsNear } = await server.ssrLoadModule('/src/lib/rig.ts');
   const { autoCutoutOrder, moveCutoutPart, resolveCutoutOrder, pairedCutoutPart, placeCutoutRelative, placeCutoutLimbRelative, getCutoutMaskGeometry, makeEditableCutoutPolygon, insertCutoutPolygonPoint, nearestCutoutPolygonVertex, mapCutoutPoint, createCutoutSlices, deformSlice, autoSkinWeights, skinGridForPart, pointInSkinPolygon, paintSkinWeights, skinBonePair, SKIN_GRID_COLUMNS, SKIN_GRID_ROWS } = await server.ssrLoadModule('/src/lib/cutout.ts');
@@ -162,11 +163,19 @@ try {
   assert.match(navHtml, /aria-current="page"/);
   const playerHtml=renderToStaticMarkup(React.createElement(AnimationPreviewWorkspace));
   assert.match(playerHtml,/Animation Preview/);
+  assert.match(playerHtml,/ap-stage ap-checker-on/, 'The checker stage must use a namespaced CSS class');
+  assert.doesNotMatch(playerHtml,/ap-stage checker/, 'Global .checker positions elements absolutely and breaks the page');
+  const previewCss=await readFile(new URL('../src/studio-v11.css',import.meta.url),'utf8');
+  assert.match(previewCss,/\.ap-stage\.ap-checker-on\{/, 'Checker style is scoped to the Animation Preview stage');
   assert.match(playerHtml,/Sprite Sheet/);
   assert.match(playerHtml,/หลายรูป/);
   assert.match(playerHtml,/FRAME 1 \/ 8/);
   assert.match(playerHtml,/จำนวนเฟรมที่ใช้จริง/);
-  assert.match(playerHtml,/เลือกรูปหลายไฟล์/);
+  assert.match(playerHtml,/เพิ่มรูปเข้าชุดปัจจุบัน/);
+  assert.match(playerHtml,/นำเข้าชุดใหม่ \(แทนที่ทั้งหมด\)/);
+  assert.match(playerHtml,/ลบเฟรมที่เลือก/);
+  assert.match(playerHtml,/ล้างทุกเฟรม/);
+  assert.match(playerHtml,/จับลากการ์ดเพื่อแทรกก่อน\/หลัง/);
   assert.match(playerHtml,/1–60 FPS/);
   assert.deepEqual(spriteCell(1024,512,4,2,5),{index:5,column:1,row:1,x:256,y:256,width:256,height:256});
   assert.deepEqual(spriteCells(1024,512,4,2,6).map(item=>item.index),[0,1,2,3,4,5], 'A six-frame animation uses only the first six of eight grid cells');
@@ -177,6 +186,13 @@ try {
   assert.equal(clampPreviewCount(500),256);
   assert.equal(nextPreviewFrame(5,6,true),0);
   assert.equal(nextPreviewFrame(5,6,false),5);
+  assert.deepEqual(combinePreviewFrames(['a','b'],['c','d'],'append'),['a','b','c','d'], 'Repeated imports append frames, rather than replacing old frames');
+  assert.deepEqual(combinePreviewFrames(['a','b'],['c','d'],'replace'),['c','d'], 'Replace-all imports discard the old sequence');
+  assert.deepEqual(combinePreviewFrames(['a','b'],['c','d'],'append',3),['a','b','c'], 'The timeline respects the 256-frame (or provided) cap');
+  assert.deepEqual(movePreviewFrame(['a','b','c','d'],0,3),{frames:['b','c','a','d'],index:2}, 'Dragging first card before fourth inserts at the drop position');
+  assert.deepEqual(movePreviewFrame(['a','b','c','d'],3,1),{frames:['a','d','b','c'],index:1}, 'Dragging a later card before an earlier card inserts it correctly');
+  assert.deepEqual(movePreviewFrame(['a','b','c','d'],0,4),{frames:['b','c','d','a'],index:3}, 'Dropping after the final card moves the dragged frame to the end');
+  assert.deepEqual(movePreviewFrame(['a',null,'b'],2,1),{frames:['a','b',null],index:1}, 'An empty frame slot is a valid drop target');
 
   // Anatomical left is viewer-right at S (front), but viewer-left at N (back).
   const front = initialJoints(undefined,'S');
@@ -398,6 +414,8 @@ try {
   console.log('✓ Color-based wand region and mirrored geometry stay within their selection rules');
   console.log('✓ v0.10 Bone / Mask / Weight / Depth panels, constrained Auto Weight, painting and 2-bone Vertex blending pass');
   console.log('✓ v0.11 independent Animation Preview, natural PNG order, grid slicing and six-of-eight Sprite Sheet frame counts pass');
+  console.log('✓ v0.12 shared multi-source timeline, repeated append, replace-all, frame deletion controls and before/after drag insertion pass');
+  console.log('✓ v0.12.1 checker CSS no longer collides with the global absolute-position checkerboard');
 } finally {
   await server?.close();
 }

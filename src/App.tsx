@@ -44,6 +44,7 @@ import './studio-v08.css';
 import './studio-v09.css';
 import './studio-v10.css';
 import './studio-v11.css';
+import './studio-v12.css';
 
 type WorkTab = 'inspect' | 'tag' | 'shape' | 'ai' | 'rig' | 'animation' | 'docs';
 type HistoryItem = { map: CharacterMap; imageUrl: string; imageSize: { width: number; height: number }; docsText: string; version: number };

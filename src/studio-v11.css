@@ -24,7 +24,7 @@
 .ap-view-toggles label{display:flex;gap:5px;align-items:center;color:#a6bdbb;font-size:10px;white-space:nowrap;cursor:pointer;}
 .ap-view-toggles input,.ap-loop input,.ap-check input{accent-color:#98e9c2;}
 .ap-stage{position:relative;display:flex;align-items:center;justify-content:center;min-height:365px;height:clamp(365px,48vh,615px);background:#171d25;outline:none;overflow:hidden;}
-.ap-stage.checker{background-color:#242b34;background-image:linear-gradient(45deg,#343c46 25%,transparent 25%),linear-gradient(-45deg,#343c46 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#343c46 75%),linear-gradient(-45deg,transparent 75%,#343c46 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0;}
+.ap-stage.ap-checker-on{background-color:#242b34;background-image:linear-gradient(45deg,#343c46 25%,transparent 25%),linear-gradient(-45deg,#343c46 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#343c46 75%),linear-gradient(-45deg,transparent 75%,#343c46 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0;}
 .ap-stage canvas{width:auto;height:auto;display:block;max-width:100%;max-height:100%;aspect-ratio:850/600;object-fit:contain;}
 .ap-stage-tag{position:absolute;right:15px;bottom:12px;font:500 9px 'IBM Plex Mono',monospace;color:#b0cabc;padding:6px 9px;background:#142126d6;border:1px solid #344b4b;border-radius:5px;pointer-events:none;}
 .ap-stage-tag span{color:#59897b;padding:0 4px;}

@@ -30,3 +30,17 @@ export function nextPreviewFrame(current:number,count:number,loop:boolean):numbe
   const length=clampPreviewCount(count);
   return current+1<length?current+1:loop?0:length-1;
 }
+
+/** Insert before position 0..length. If dragging to the right, account for the removed slot. */
+export function movePreviewFrame<T>(frames:T[],from:number,insertAt:number):{frames:T[];index:number}{
+  if(from<0||from>=frames.length||insertAt<0||insertAt>frames.length)return {frames:[...frames],index:from};
+  const copy=[...frames],item=copy.splice(from,1)[0];
+  const index=Math.min(copy.length,insertAt>from?insertAt-1:insertAt);
+  copy.splice(index,0,item);
+  return {frames:copy,index};
+}
+
+/** A missing slot can exist; adding or replacing preserves explicit frame placement. */
+export function combinePreviewFrames<T>(existing:(T|null)[],incoming:T[],action:'append'|'replace',limit=256):(T|null)[]{
+  return (action==='replace'?[...incoming]:[...existing,...incoming]).slice(0,limit);
+}
